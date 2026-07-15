@@ -1,0 +1,49 @@
+[package]
+name = "gbaroll"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+publish = false
+
+[dependencies]
+# Engine (lives in the tango workspace next door).
+mgba.workspace = true
+mgba-siolink.workspace = true
+rennet.workspace = true
+
+gbaroll-replay = { path = "../gbaroll-replay" }
+gbaroll-signaling = { path = "../gbaroll-signaling" }
+
+# UI. wgpu is pinned to iced_wgpu 0.14's transitive version so cargo
+# unifies the crate (the framebuffer widget talks to wgpu directly).
+iced = { version = "0.14", features = ["tokio", "advanced", "canvas"] }
+wgpu = { version = "27", default-features = false }
+rfd = "0.14"
+
+# Audio + gamepad. SDL3's handles are !Send and main-thread-only;
+# send_wrapper lets them live in globals with a runtime thread check.
+sdl3 = { version = "0.18", default-features = false, features = ["build-from-source-static"] }
+send_wrapper = "0.6"
+bytemuck = "1"
+
+# Netplay transport.
+datachannel-wrapper = { git = "https://github.com/tangobattle/datachannel-wrapper" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+tokio-tungstenite.workspace = true
+futures.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+bincode.workspace = true
+crc32fast.workspace = true
+chrono = "0.4"
+directories-next = "2"
+walkdir = "2"
+log.workspace = true
+env_logger.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+gbaroll-signaling-server = { path = "../gbaroll-signaling-server" }
+tempfile = "3"

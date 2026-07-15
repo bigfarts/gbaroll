@@ -1,0 +1,17 @@
+[package]
+name = "gbaroll-signaling-server"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+publish = false
+
+[dependencies]
+gbaroll-signaling = { path = "../gbaroll-signaling" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+tokio-tungstenite.workspace = true
+futures.workspace = true
+log.workspace = true
+env_logger.workspace = true
+anyhow.workspace = true
+rand = "0.8"
+clap = { version = "4", features = ["derive"] }
