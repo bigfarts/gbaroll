@@ -1,7 +1,9 @@
 //! The Settings tab: identity, directories, netplay, video/audio, and
 //! the input binding editor (with live capture).
 
-use iced::widget::{button, checkbox, column, container, row, scrollable, slider, text, text_input};
+use iced::widget::{
+    button, checkbox, column, container, row, scrollable, slider, text, text_input,
+};
 use iced::{Element, Length, Theme};
 
 use super::{App, Message, PADDING};
@@ -32,7 +34,9 @@ fn section<'a>(title: &'a str, content: Element<'a, Message>) -> Element<'a, Mes
         .padding(PADDING)
         .width(Length::Fill)
         .style(|theme: &Theme| container::Style {
-            background: Some(iced::Background::Color(theme.extended_palette().background.weak.color)),
+            background: Some(iced::Background::Color(
+                theme.extended_palette().background.weak.color,
+            )),
             border: iced::Border {
                 radius: 6.0.into(),
                 ..Default::default()
@@ -43,17 +47,22 @@ fn section<'a>(title: &'a str, content: Element<'a, Message>) -> Element<'a, Mes
 }
 
 fn labeled<'a>(label: &'a str, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
-    row![text(label).width(Length::Fixed(150.0)).size(14), content.into()]
-        .spacing(8)
-        .align_y(iced::Alignment::Center)
-        .into()
+    row![
+        text(label).width(Length::Fixed(150.0)).size(14),
+        content.into()
+    ]
+    .spacing(8)
+    .align_y(iced::Alignment::Center)
+    .into()
 }
 
 fn dir_row<'a>(label: &'a str, path: &std::path::Path, pick: Message) -> Element<'a, Message> {
     labeled(
         label,
         row![
-            text(path.display().to_string()).size(12).width(Length::Fill),
+            text(path.display().to_string())
+                .size(12)
+                .width(Length::Fill),
             button(text("change…")).padding([2, 8]).on_press(pick),
         ]
         .spacing(8)
@@ -118,6 +127,16 @@ pub fn view(app: &App) -> Element<'_, Message> {
             dir_row("ROMs", &config.roms_dir, Message::PickRomsDir),
             dir_row("saves", &config.saves_dir, Message::PickSavesDir),
             dir_row("replays", &config.replays_dir, Message::PickReplaysDir),
+            dir_row("No-Intro DATs", &config.dats_dir, Message::PickDatsDir),
+            labeled(
+                "",
+                text(if app.dats.is_empty() {
+                    "no DAT names loaded — drop No-Intro .dat files in the DATs folder and rescan".to_string()
+                } else {
+                    format!("{} name(s) from {} DAT file(s)", app.dats.len(), app.dats.files())
+                })
+                .size(12),
+            ),
         ]
         .spacing(6)
         .into(),
@@ -134,13 +153,14 @@ pub fn view(app: &App) -> Element<'_, Message> {
                     .width(Length::Fixed(320.0)),
             ),
             labeled(
-                "STUN/TURN",
-                text("provided by the signaling server").size(12),
-            ),
-            labeled(
                 "input delay",
                 row![
-                    slider(0..=10u32, config.present_delay, Message::PresentDelayChanged).width(Length::Fixed(180.0)),
+                    slider(
+                        0..=10u32,
+                        config.present_delay,
+                        Message::PresentDelayChanged
+                    )
+                    .width(Length::Fixed(180.0)),
                     text(format!("{} ticks", config.present_delay)).size(13),
                 ]
                 .spacing(8)
@@ -191,20 +211,22 @@ pub fn view(app: &App) -> Element<'_, Message> {
         // Wrap the pane in an input capture so the next key or pad
         // button becomes the binding (Escape cancels).
         InputCapture::new(body, |input| {
-            if let Input::Keyboard(iced::keyboard::Event::KeyPressed { physical_key, .. }) = &input {
+            if let Input::Keyboard(iced::keyboard::Event::KeyPressed { physical_key, .. }) = &input
+            {
                 if *physical_key
                     == iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::Escape)
                 {
                     return Some(Message::BindingCaptureCancel);
                 }
-                return Some(Message::BindingCaptured(PhysicalInput::Key(input::KeyPhysical(
-                    *physical_key,
-                ))));
+                return Some(Message::BindingCaptured(PhysicalInput::Key(
+                    input::KeyPhysical(*physical_key),
+                )));
             }
             match input.to_event() {
-                Some(input::Event::Button { button, pressed: true }) => {
-                    Some(Message::BindingCaptured(PhysicalInput::Button(button)))
-                }
+                Some(input::Event::Button {
+                    button,
+                    pressed: true,
+                }) => Some(Message::BindingCaptured(PhysicalInput::Button(button))),
                 Some(input::Event::Axis { axis, value }) if value.abs() > input::AXIS_THRESHOLD => {
                     Some(Message::BindingCaptured(PhysicalInput::Axis {
                         axis,

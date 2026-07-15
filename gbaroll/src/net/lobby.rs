@@ -14,7 +14,9 @@ use crate::net::mesh::{self, PeerLink};
 pub enum LobbyCommand {
     SetReady { ready: bool, save: Option<Vec<u8>> },
     Chat(String),
-    Start,
+    /// Host only; carries the host's own save (the host never readies
+    /// up).
+    Start { save: Option<Vec<u8>> },
     Leave,
 }
 
@@ -128,8 +130,8 @@ async fn run(
                     Some(LobbyCommand::Chat(text)) => {
                         send(&mut sink, &ClientMessage::Chat { text }).await?;
                     }
-                    Some(LobbyCommand::Start) => {
-                        send(&mut sink, &ClientMessage::Start).await?;
+                    Some(LobbyCommand::Start { save }) => {
+                        send(&mut sink, &ClientMessage::Start { save }).await?;
                     }
                     Some(LobbyCommand::Leave) | None => {
                         let _ = send(&mut sink, &ClientMessage::Leave).await;

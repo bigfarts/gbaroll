@@ -11,6 +11,9 @@ pub struct Config {
     pub roms_dir: PathBuf,
     pub saves_dir: PathBuf,
     pub replays_dir: PathBuf,
+    /// No-Intro DAT files (Logiqx XML or ClrMamePro) live here; they
+    /// supply the library's display names.
+    pub dats_dir: PathBuf,
     /// WebSocket URL of the gbaroll signaling server (which also hands
     /// out the ICE servers for the mesh).
     pub signaling_server: String,
@@ -36,6 +39,7 @@ impl Default for Config {
             roms_dir: data.join("roms"),
             saves_dir: data.join("saves"),
             replays_dir: data.join("replays"),
+            dats_dir: data.join("dats"),
             signaling_server: "ws://127.0.0.1:1984".to_string(),
             present_delay: 2,
             volume: 1.0,
@@ -80,7 +84,7 @@ impl Config {
     }
 
     pub fn ensure_dirs(&mut self) {
-        for dir in [&self.roms_dir, &self.saves_dir, &self.replays_dir] {
+        for dir in [&self.roms_dir, &self.saves_dir, &self.replays_dir, &self.dats_dir] {
             let _ = std::fs::create_dir_all(dir);
         }
     }

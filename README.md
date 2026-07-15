@@ -24,8 +24,11 @@ when a prediction misses.
   cable — version pairings work). Every peer simulates every side, so
   everyone needs a local **copy** of every player's ROM; the lobby
   checks your library against the roster and won't let you ready up
-  until you have them all. Saves are committed with the ready flag and
-  distributed at session start.
+  until you have them all. Saves are committed with the ready flag
+  (the host is always ready — their save rides the start) and
+  distributed at session start. Drop No-Intro DAT files (Logiqx XML or
+  ClrMamePro) into the DATs folder and the library shows canonical
+  No-Intro names instead of header titles.
 - **Replays**: every netplay session records a roundless
   `gbaroll-replay` (`.gbrr`) file — boot configuration (per-side ROM
   identity + save) plus the confirmed input stream, nothing else. The

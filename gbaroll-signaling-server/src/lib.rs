@@ -37,9 +37,12 @@ impl Room {
     fn roster(&self) -> Vec<PlayerInfo> {
         self.players
             .iter()
-            .map(|p| PlayerInfo {
+            .enumerate()
+            .map(|(i, p)| PlayerInfo {
                 nick: p.nick.clone(),
-                ready: p.ready,
+                // The host never readies up; their seat always reads
+                // ready (their save rides the Start message).
+                ready: i == 0 || p.ready,
                 rom_crc32: p.rom_crc32,
                 rom_title: p.rom_title.clone(),
             })
@@ -304,6 +307,11 @@ fn handle_message(
                 return true;
             }
             let Some(i) = player_idx(room, &m.tx) else { return true };
+            if i == 0 {
+                // The host doesn't ready up; their save arrives with
+                // Start.
+                return true;
+            }
             room.players[i].ready = ready;
             room.players[i].save = if ready { save } else { None };
             room.broadcast_roster();
@@ -322,8 +330,12 @@ fn handle_message(
             });
             true
         }
-        ClientMessage::Start => {
+        ClientMessage::Start { save } => {
             let Some(m) = membership.as_ref() else { return true };
+            if save.as_ref().is_some_and(|s| s.len() > MAX_SAVE_SIZE) {
+                send_error(tx, ErrorKind::Malformed, "save image too large");
+                return true;
+            }
             let mut rooms = rooms.lock().unwrap();
             let Some(room) = rooms.get_mut(&m.code) else { return true };
             if room.started {
@@ -334,10 +346,11 @@ fn handle_message(
                 send_error(tx, ErrorKind::NotHost, "only the host can start");
                 return true;
             }
-            if room.players.len() < 2 || !room.players.iter().all(|p| p.ready) {
+            if room.players.len() < 2 || !room.players.iter().skip(1).all(|p| p.ready) {
                 send_error(tx, ErrorKind::NotEveryoneReady, "need 2+ players, all ready");
                 return true;
             }
+            room.players[0].save = save;
             room.started = true;
             let clock_unix_micros = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

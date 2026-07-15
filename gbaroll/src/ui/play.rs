@@ -28,8 +28,8 @@ impl Default for State {
 
 fn rom_row<'a>(rom: &crate::library::RomInfo, selected: bool) -> Element<'a, Message> {
     let label = row![
-        text(rom.title.clone()).width(Length::FillPortion(3)),
-        text(rom.code.clone()).width(Length::FillPortion(1)),
+        text(rom.display_name().to_string()).width(Length::FillPortion(5)),
+        text(rom.code.clone()).width(Length::FillPortion(1)).size(12),
         text(format!("{:08x}", rom.crc32)).width(Length::FillPortion(1)).size(12),
         text(format!("{} KiB", rom.size / 1024))
             .width(Length::FillPortion(1))
@@ -54,6 +54,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .iter()
         .filter(|r| {
             needle.is_empty()
+                || r.display_name().to_ascii_lowercase().contains(&needle)
                 || r.title.to_ascii_lowercase().contains(&needle)
                 || r.code.to_ascii_lowercase().contains(&needle)
         })
@@ -124,8 +125,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .spacing(8);
 
         column![
-            text(rom.title.clone()).size(20),
-            text(format!("{} · crc32 {:08x}", rom.code, rom.crc32)).size(13),
+            text(rom.display_name().to_string()).size(20),
+            text(format!("{} · {} · crc32 {:08x}", rom.title, rom.code, rom.crc32)).size(13),
             text(rom.path.display().to_string()).size(11),
             iced::widget::Space::new().height(Length::Fixed(8.0)),
             row![text("nickname:"), text_input("nickname", &app.config.nick).on_input(Message::NickChanged).padding(6).width(Length::Fixed(160.0))]

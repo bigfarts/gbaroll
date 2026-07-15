@@ -127,23 +127,26 @@ pub fn view<'a>(state: &'a State, library: &'a Library, saves_dir: &std::path::P
     let mut saves: Vec<SaveChoice> = vec![SaveChoice::Fresh];
     saves.extend(crate::library::list_saves(saves_dir).into_iter().map(SaveChoice::File));
 
-    let mut ready_box = checkbox(state.my_ready);
-    if have_all_roms || state.my_ready {
-        ready_box = ready_box.on_toggle(Message::LobbyReadyToggled);
-    }
-    let ready_row = row![
+    // The host never readies up (their save rides the Start message);
+    // everyone else commits their save behind the ready flag.
+    let mut ready_row = row![
         text("my save:"),
         pick_list(saves, Some(state.save_choice.clone()), Message::LobbySaveSelected),
-        ready_box,
-        text("ready"),
     ]
     .spacing(8)
     .align_y(iced::Alignment::Center);
+    if state.my_idx != 0 {
+        let mut ready_box = checkbox(state.my_ready);
+        if have_all_roms || state.my_ready {
+            ready_box = ready_box.on_toggle(Message::LobbyReadyToggled);
+        }
+        ready_row = ready_row.push(ready_box).push(text("ready"));
+    }
 
     let start_row: Element<'_, Message> = if state.my_idx == 0 {
-        let all_ready = state.players.len() >= 2 && state.players.iter().all(|p| p.ready);
+        let all_ready = state.players.len() >= 2 && state.players.iter().skip(1).all(|p| p.ready);
         let mut btn = button(text("Start session")).padding(8);
-        if all_ready {
+        if all_ready && have_all_roms {
             btn = btn.on_press(Message::LobbyStartClicked);
         }
         row![
@@ -151,7 +154,7 @@ pub fn view<'a>(state: &'a State, library: &'a Library, saves_dir: &std::path::P
             text(if all_ready {
                 "".to_string()
             } else {
-                "waiting for 2+ players, all ready".to_string()
+                "waiting for everyone to ready up".to_string()
             })
             .size(12),
         ]

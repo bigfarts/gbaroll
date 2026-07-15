@@ -151,6 +151,7 @@ pub enum Message {
     PickRomsDir,
     PickSavesDir,
     PickReplaysDir,
+    PickDatsDir,
     BindingCaptureStart(MappedKey),
     BindingCaptured(PhysicalInput),
     BindingCaptureCancel,
@@ -161,6 +162,7 @@ pub enum Message {
 pub struct App {
     pub config: Config,
     pub library: Library,
+    pub dats: crate::library::DatIndex,
     pub tab: Tab,
     pub notice: Option<String>,
 
@@ -195,7 +197,8 @@ impl App {
         };
         audio_binder.set_volume(config.volume);
 
-        let library = Library::scan(&config.roms_dir);
+        let dats = crate::library::DatIndex::load_dir(&config.dats_dir);
+        let library = Library::scan(&config.roms_dir, &dats);
         let replays = replays::State::scan(&config.replays_dir);
 
         (
@@ -206,6 +209,7 @@ impl App {
                 lobby: None,
                 session: None,
                 library,
+                dats,
                 notice: None,
                 audio_binder,
                 _audio_backend: audio_backend,
@@ -284,7 +288,8 @@ impl App {
             Message::LocalPlayersChanged(n) => self.play.local_players = n.clamp(2, 4),
             Message::LocalSaveSelected(choice) => self.play.local_save = choice,
             Message::RescanRoms => {
-                self.library = Library::scan(&self.config.roms_dir);
+                self.dats = crate::library::DatIndex::load_dir(&self.config.dats_dir);
+                self.library = Library::scan(&self.config.roms_dir, &self.dats);
                 self.play.selected_crc = self
                     .play
                     .selected_crc
@@ -354,8 +359,12 @@ impl App {
                 }
             }
             Message::LobbyStartClicked => {
-                if let Some(lobby) = &self.lobby {
-                    lobby.handle.send(LobbyCommand::Start);
+                let Some(lobby) = &self.lobby else {
+                    return Task::none();
+                };
+                match lobby.save_choice.read() {
+                    Ok(save) => lobby.handle.send(LobbyCommand::Start { save }),
+                    Err(e) => self.notice(format!("couldn't read save: {e:#}")),
                 }
             }
             Message::LobbyLeaveClicked => {
@@ -478,7 +487,15 @@ impl App {
                 if let Some(dir) = rfd::FileDialog::new().set_directory(&self.config.roms_dir).pick_folder() {
                     self.config.roms_dir = dir;
                     self.config.save();
-                    self.library = Library::scan(&self.config.roms_dir);
+                    self.library = Library::scan(&self.config.roms_dir, &self.dats);
+                }
+            }
+            Message::PickDatsDir => {
+                if let Some(dir) = rfd::FileDialog::new().set_directory(&self.config.dats_dir).pick_folder() {
+                    self.config.dats_dir = dir;
+                    self.config.save();
+                    self.dats = crate::library::DatIndex::load_dir(&self.config.dats_dir);
+                    self.library = Library::scan(&self.config.roms_dir, &self.dats);
                 }
             }
             Message::PickSavesDir => {
@@ -606,7 +623,7 @@ impl App {
             server_url: self.config.signaling_server.clone(),
             nick: self.config.nick.clone(),
             rom_crc32: rom.crc32,
-            rom_title: rom.title.clone(),
+            rom_title: rom.display_name().to_string(),
             mode,
         });
         self.lobby = Some(lobby::State::new(handle));

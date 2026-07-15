@@ -83,13 +83,14 @@ fn two_player_netplay_smoke() {
         LobbyEvent::Joined { .. } => Some(()),
         _ => None,
     });
-    host.send(LobbyCommand::SetReady { ready: true, save: None });
+    // The host never readies up — only the guest does; the host's seat
+    // must still read ready in the roster.
     guest.send(LobbyCommand::SetReady { ready: true, save: None });
     wait_event(&host, "everyone ready", Duration::from_secs(10), |e| match e {
         LobbyEvent::Roster { players, .. } if players.len() == 2 && players.iter().all(|p| p.ready) => Some(()),
         _ => None,
     });
-    host.send(LobbyCommand::Start);
+    host.send(LobbyCommand::Start { save: None });
 
     // Mesh comes up (real datachannels over loopback). The bundle has
     // to move out of the event, so this doesn't go through wait_event's

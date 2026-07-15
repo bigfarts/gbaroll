@@ -100,7 +100,18 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .collect::<Vec<_>>()
             .join(" vs ");
         let roms: Vec<&str> = {
-            let mut titles: Vec<&str> = meta.players.iter().map(|p| p.rom_title.as_str()).collect();
+            // Prefer the No-Intro name from our own library; the stored
+            // header title is the fallback for ROMs we no longer have.
+            let mut titles: Vec<&str> = meta
+                .players
+                .iter()
+                .map(|p| {
+                    app.library
+                        .by_crc32(p.rom_crc32)
+                        .map(|r| r.display_name())
+                        .unwrap_or(p.rom_title.as_str())
+                })
+                .collect();
             titles.dedup();
             titles
         };

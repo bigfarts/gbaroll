@@ -69,9 +69,10 @@ pub enum ClientMessage {
     },
     /// Lobby chat, broadcast to the room.
     Chat { text: String },
-    /// Host only: lock the room and start the session. Requires at least
-    /// 2 players, all ready.
-    Start,
+    /// Host only: lock the room and start the session. Requires at
+    /// least 2 players and every non-host player ready — the host
+    /// never readies up; their save rides along here instead.
+    Start { save: Option<Vec<u8>> },
     /// Relay an opaque peer signal (SDP/candidate) to another player in
     /// the room. Only meaningful once the room has started.
     Signal { to: u8, payload: Vec<u8> },
@@ -134,7 +135,8 @@ pub enum ServerMessage {
     /// The room's occupancy, sent to every member whenever it changes.
     /// Slot order is player order; `your_idx` is the recipient's slot
     /// (indices compact downward when someone leaves the lobby). Any
-    /// occupancy change resets every ready flag.
+    /// occupancy change resets every ready flag. Slot 0 (the host) is
+    /// always reported ready.
     Roster {
         players: Vec<PlayerInfo>,
         your_idx: u8,
