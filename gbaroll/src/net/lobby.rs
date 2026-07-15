@@ -13,7 +13,6 @@ use crate::net::mesh::{self, PeerLink};
 #[derive(Debug)]
 pub enum LobbyCommand {
     SetReady { ready: bool },
-    Chat(String),
     /// Host only.
     Start,
     /// The local machine's encoded boot payload, captured by the UI in
@@ -26,7 +25,6 @@ pub enum LobbyEvent {
     /// The room was created/joined; here's its code.
     Joined { code: String },
     Roster { players: Vec<PlayerInfo>, your_idx: usize },
-    Chat { nick: String, text: String },
     /// Non-fatal problem (e.g. "not everyone is ready").
     Error(String),
     /// The lobby is dead; the UI should drop it.
@@ -135,9 +133,6 @@ async fn run(
                     Some(LobbyCommand::SetReady { ready }) => {
                         send(&mut sink, &ClientMessage::SetReady { ready }).await?;
                     }
-                    Some(LobbyCommand::Chat(text)) => {
-                        send(&mut sink, &ClientMessage::Chat { text }).await?;
-                    }
                     Some(LobbyCommand::Start) => {
                         send(&mut sink, &ClientMessage::Start).await?;
                     }
@@ -172,9 +167,6 @@ async fn run(
                     }
                     ServerMessage::Roster { players, your_idx } => {
                         let _ = events.send(LobbyEvent::Roster { players, your_idx: your_idx as usize });
-                    }
-                    ServerMessage::Chat { nick, text, .. } => {
-                        let _ = events.send(LobbyEvent::Chat { nick, text });
                     }
                     ServerMessage::Error { kind, message } => {
                         let fatal = matches!(

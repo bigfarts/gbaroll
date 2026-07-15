@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 /// Bumped on any incompatible protocol change. Carried on the first
 /// message (create/join); the server rejects mismatches.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Most players a room holds — the size of a real multi-cable chain.
 pub const MAX_PLAYERS: usize = 4;
@@ -58,8 +58,6 @@ pub enum ClientMessage {
     },
     /// Flip the ready flag.
     SetReady { ready: bool },
-    /// Lobby chat, broadcast to the room.
-    Chat { text: String },
     /// Host only: lock the room and start the session. Requires at
     /// least 2 players and every non-host player ready (the host never
     /// readies up).
@@ -132,7 +130,6 @@ pub enum ServerMessage {
         players: Vec<PlayerInfo>,
         your_idx: u8,
     },
-    Chat { from: u8, nick: String, text: String },
     /// The room is locked and the session begins. Every peer builds the
     /// same link — `players[i]`'s capture (exchanged over the mesh) on
     /// side `i`, everyone's cart RTC pinned to `clock_unix_micros`.

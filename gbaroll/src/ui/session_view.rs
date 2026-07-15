@@ -421,13 +421,13 @@ fn menu_overlay<'a>(state: &'a State, config: &'a Config) -> Element<'a, Message
     );
     items = items.push(
         row![
-            button(text("Resume")).padding(8).on_press(Message::SessionToggleMenu),
+            button(text("Resume")).padding([8, 16]).on_press(Message::SessionToggleMenu),
             button(text("Quit session"))
-                .padding(8)
+                .padding([8, 16])
                 .style(button::danger)
                 .on_press(Message::SessionQuit),
         ]
-        .spacing(8),
+        .spacing(10),
     );
     overlay_panel(items.into())
 }
@@ -454,95 +454,111 @@ fn end_overlay(state: &State) -> Element<'_, Message> {
     overlay_panel(
         column![
             text(message).size(16),
-            button(text("Back")).padding(8).on_press(Message::SessionDismissEnd),
+            button(text("Back")).padding([8, 20]).on_press(Message::SessionDismissEnd),
         ]
-        .spacing(12)
+        .spacing(16)
         .align_x(iced::Alignment::Center)
         .into(),
     )
 }
 
-/// The link sidebar: the lobby while a room is up, the live roster +
-/// unplug while the cable is in, and host/join otherwise.
-fn link_sidebar<'a>(
-    state: &'a State,
-    lobby: Option<&'a super::lobby::State>,
-    library: &'a Library,
-) -> Element<'a, Message> {
-    let d = &state.runtime.descriptor;
-    let content: Element<'a, Message> = if let Some(lobby) = lobby {
-        super::lobby::sidebar(lobby, library)
-    } else if d.kind == SessionKind::Netplay {
-        let mut peers = column![].spacing(2);
-        for peer in &state.stats.peers {
-            peers = peers.push(
-                text(format!(
-                    "{}: {}",
-                    peer.nick,
-                    peer.rtt_ms.map(|ms| format!("{ms:.0}ms")).unwrap_or_else(|| "…".into())
-                ))
-                .size(12),
-            );
-        }
-        column![
-            text(format!(
-                "Linked — room {}",
-                d.room_code.clone().unwrap_or_default()
-            ))
-            .size(15),
-            peers,
-            iced::widget::Space::new().height(Length::Fill),
-            button(text("Unplug").size(13)).style(button::danger).on_press(Message::SessionUnplug),
-            text("your game continues on its own after unplugging").size(11),
-        ]
-        .spacing(8)
-        .height(Length::Fill)
-        .into()
-    } else {
-        let mut panel = column![text("Link cable").size(15)].spacing(8);
-        if let Some(notice) = &state.link_notice {
-            panel = panel.push(text(notice.clone()).size(12).style(|theme: &Theme| text::Style {
-                color: Some(theme.extended_palette().danger.base.color),
-            }));
-        }
-        panel = panel.push(
-            text("Host a room or join one — the cable plugs into the running game when the room starts.").size(11),
-        );
-        panel = panel.push(button(text("Host a room").size(13)).padding(8).on_press(Message::LinkHostClicked));
-        panel = panel.push(
-            row![
-                text_input("room code", &state.link_code)
-                    .on_input(Message::LinkCodeChanged)
-                    .on_submit(Message::LinkJoinClicked)
-                    .padding(6)
-                    .size(13),
-                button(text("Join").size(13)).padding(8).on_press(Message::LinkJoinClicked),
-            ]
-            .spacing(6)
-            .align_y(iced::Alignment::Center),
-        );
-        panel.height(Length::Fill).into()
-    };
+/// A centered modal card with a title bar + close button over a dimmed
+/// backdrop. Close routes through the Link toggle, which just hides the
+/// modal — any running lobby keeps going behind it.
+fn modal_card<'a>(title: String, body: Element<'a, Message>) -> Element<'a, Message> {
+    let head = row![
+        text(title).size(18).width(Length::Fill),
+        button(text("✕").size(16))
+            .padding([2, 8])
+            .style(button::text)
+            .on_press(Message::SessionLinkToggle),
+    ]
+    .align_y(iced::Alignment::Center);
 
     container(
-        container(content)
-            .padding(PADDING)
-            .width(Length::Fixed(300.0))
-            .height(Length::Fill)
+        container(column![head, body].spacing(16))
+            .padding(PADDING * 2.0)
+            .width(Length::Fixed(440.0))
             .style(|theme: &Theme| container::Style {
                 background: Some(iced::Background::Color(theme.extended_palette().background.base.color)),
                 border: iced::Border {
+                    radius: 10.0.into(),
                     width: 1.0,
                     color: theme.extended_palette().background.strong.color,
-                    ..Default::default()
                 },
                 ..Default::default()
             }),
     )
     .width(Length::Fill)
     .height(Length::Fill)
-    .align_x(iced::alignment::Horizontal::Right)
+    .align_x(iced::alignment::Horizontal::Center)
+    .align_y(iced::alignment::Vertical::Center)
+    .style(|_theme: &Theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.6))),
+        ..Default::default()
+    })
     .into()
+}
+
+/// The link modal: the lobby while a room is up, the live roster + unplug
+/// while the cable is in, and host/join otherwise.
+fn link_modal<'a>(
+    state: &'a State,
+    lobby: Option<&'a super::lobby::State>,
+    library: &'a Library,
+) -> Element<'a, Message> {
+    let d = &state.runtime.descriptor;
+    let (title, body): (String, Element<'a, Message>) = if let Some(lobby) = lobby {
+        let code = lobby.code.clone().unwrap_or_else(|| "…".to_string());
+        (format!("Room {code}"), super::lobby::content(lobby, library))
+    } else if d.kind == SessionKind::Netplay {
+        let mut peers = column![].spacing(4);
+        for peer in &state.stats.peers {
+            peers = peers.push(
+                text(format!(
+                    "{} · {}",
+                    peer.nick,
+                    peer.rtt_ms.map(|ms| format!("{ms:.0} ms")).unwrap_or_else(|| "…".into())
+                ))
+                .size(14),
+            );
+        }
+        let title = format!("Linked · room {}", d.room_code.clone().unwrap_or_default());
+        let body = column![
+            peers,
+            button(text("Unplug")).padding([8, 16]).style(button::danger).on_press(Message::SessionUnplug),
+            text("your game continues on its own after unplugging").size(12),
+        ]
+        .spacing(12)
+        .into();
+        (title, body)
+    } else {
+        let mut panel = column![].spacing(12);
+        if let Some(notice) = &state.link_notice {
+            panel = panel.push(text(notice.clone()).size(13).style(|theme: &Theme| text::Style {
+                color: Some(theme.extended_palette().danger.base.color),
+            }));
+        }
+        panel = panel.push(
+            text("Host a room or join one — the cable plugs into the running game when the room starts.").size(13),
+        );
+        panel = panel.push(button(text("Host a room")).padding([8, 16]).on_press(Message::LinkHostClicked));
+        panel = panel.push(
+            row![
+                text_input("room code", &state.link_code)
+                    .on_input(Message::LinkCodeChanged)
+                    .on_submit(Message::LinkJoinClicked)
+                    .padding(8)
+                    .width(Length::Fill),
+                button(text("Join")).padding([8, 16]).on_press(Message::LinkJoinClicked),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
+        );
+        ("Link cable".to_string(), panel.into())
+    };
+
+    modal_card(title, body)
 }
 
 pub fn view<'a>(
@@ -560,10 +576,16 @@ pub fn view<'a>(
     body = body.push(transport(state));
 
     let kind = state.runtime.descriptor.kind;
+    let link_open = state.link_open;
     let captured = InputCapture::new(body, move |input| {
         if let Input::Keyboard(iced::keyboard::Event::KeyPressed { physical_key, .. }) = &input {
             if *physical_key == Physical::Code(Code::Escape) {
-                return Some(Message::SessionToggleMenu);
+                // Escape backs out of the link modal first, else the menu.
+                return Some(if link_open {
+                    Message::SessionLinkToggle
+                } else {
+                    Message::SessionToggleMenu
+                });
             }
             if kind == SessionKind::Playback && *physical_key == Physical::Code(Code::Space) {
                 return Some(Message::SessionPauseToggled);
@@ -573,8 +595,8 @@ pub fn view<'a>(
     });
 
     let mut layers = stack![Element::from(captured)];
-    if (state.link_open || lobby.is_some()) && link_capable(state) && state.end.is_none() {
-        layers = layers.push(link_sidebar(state, lobby, library));
+    if state.link_open && link_capable(state) && state.end.is_none() {
+        layers = layers.push(link_modal(state, lobby, library));
     }
     if state.end.is_some() {
         layers = layers.push(end_overlay(state));

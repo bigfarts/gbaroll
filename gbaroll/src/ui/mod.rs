@@ -122,11 +122,9 @@ pub enum Message {
     LinkJoinClicked,
     SessionUnplug,
 
-    // Lobby (inside the sidebar).
+    // Lobby (inside the link modal).
     LobbyPoll,
     LobbyReadyToggled(bool),
-    LobbyChatChanged(String),
-    LobbyChatSubmitted,
     LobbyStartClicked,
     LobbyLeaveClicked,
 
@@ -363,19 +361,6 @@ impl App {
                 if let Some(lobby) = &mut self.lobby {
                     lobby.my_ready = ready;
                     lobby.handle.send(LobbyCommand::SetReady { ready });
-                }
-            }
-            Message::LobbyChatChanged(s) => {
-                if let Some(lobby) = &mut self.lobby {
-                    lobby.chat_input = s;
-                }
-            }
-            Message::LobbyChatSubmitted => {
-                if let Some(lobby) = &mut self.lobby {
-                    let text = std::mem::take(&mut lobby.chat_input);
-                    if !text.trim().is_empty() {
-                        lobby.handle.send(LobbyCommand::Chat(text));
-                    }
                 }
             }
             Message::LobbyStartClicked => {
@@ -649,7 +634,9 @@ impl App {
             Tab::Settings => settings::view(self),
         };
 
-        layers.push(container(body).padding(PADDING).width(Length::Fill).height(Length::Fill)).into()
+        layers
+            .push(container(body).padding(PADDING * 1.5).width(Length::Fill).height(Length::Fill))
+            .into()
     }
 
     fn selected_rom(&self) -> Option<&crate::library::RomInfo> {
@@ -739,12 +726,6 @@ impl App {
                     // mirror what the server reports for us.
                     lobby.my_ready = lobby.players.get(your_idx).map(|p| p.ready).unwrap_or(false);
                 }
-                LobbyEvent::Chat { nick, text } => {
-                    lobby.chat.push((nick, text));
-                    if lobby.chat.len() > 200 {
-                        lobby.chat.remove(0);
-                    }
-                }
                 LobbyEvent::Error(message) => {
                     lobby.status = Some(message);
                 }
@@ -761,7 +742,6 @@ impl App {
                     }
                 }
                 LobbyEvent::Connecting(message) => {
-                    lobby.connecting = true;
                     lobby.status = Some(message);
                 }
                 LobbyEvent::Fatal(message) => {

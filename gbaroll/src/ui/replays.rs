@@ -90,7 +90,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .into();
     }
 
-    let mut rows = column![].spacing(4);
+    let mut rows = column![].spacing(6);
     for (index, entry) in state.entries.iter().enumerate() {
         let meta = &entry.metadata;
         let players = meta
@@ -182,11 +182,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
         row![
             text(format!("{} replay(s)", state.entries.len())),
             iced::widget::Space::new().width(Length::Fill),
-            button(text("rescan")).on_press(Message::RescanReplays),
+            button(text("rescan")).padding([8, 14]).on_press(Message::RescanReplays),
         ]
         .align_y(iced::Alignment::Center),
         scrollable(rows).height(Length::Fill),
     ]
-    .spacing(8)
+    .spacing(12)
     .into()
 }

@@ -30,8 +30,8 @@ pub struct State {
 }
 
 fn section<'a>(title: &'a str, content: Element<'a, Message>) -> Element<'a, Message> {
-    container(column![text(title).size(16), content].spacing(8))
-        .padding(PADDING)
+    container(column![text(title).size(16), content].spacing(10))
+        .padding(PADDING * 1.5)
         .width(Length::Fill)
         .style(|theme: &Theme| container::Style {
             background: Some(iced::Background::Color(
@@ -71,7 +71,7 @@ fn dir_row<'a>(label: &'a str, path: &std::path::Path, pick: Message) -> Element
 }
 
 fn bindings_editor(app: &App) -> Element<'_, Message> {
-    let mut rows = column![].spacing(6);
+    let mut rows = column![].spacing(8);
     for (key, label) in MAPPED_KEYS {
         let mut chips = row![].spacing(4);
         for (index, physical) in app.config.mapping.slot(key).iter().enumerate() {
@@ -114,10 +114,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
             "nickname",
             text_input("nickname", &config.nick)
                 .on_input(Message::NickChanged)
-                .padding(6)
+                .padding(8)
                 .width(Length::Fixed(240.0)),
         )]
-        .spacing(6)
+        .spacing(8)
         .into(),
     );
 
@@ -147,7 +147,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                     .align_y(iced::Alignment::Center)
             }),
         ]
-        .spacing(6)
+        .spacing(8)
         .into(),
     );
 
@@ -158,7 +158,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 "signaling server",
                 text_input("ws://host:1984", &config.signaling_server)
                     .on_input(Message::ServerChanged)
-                    .padding(6)
+                    .padding(8)
                     .width(Length::Fixed(320.0)),
             ),
             labeled(
@@ -176,7 +176,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 .align_y(iced::Alignment::Center),
             ),
         ]
-        .spacing(6)
+        .spacing(8)
         .into(),
     );
 
@@ -203,7 +203,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 checkbox(config.show_hud).on_toggle(Message::ShowHudToggled),
             ),
         ]
-        .spacing(6)
+        .spacing(8)
         .into(),
     );
 
@@ -211,7 +211,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
     let body = scrollable(
         column![identity, dirs, netplay, av, input_section]
-            .spacing(PADDING)
+            .spacing(PADDING * 1.5)
             .width(Length::Fill),
     )
     .height(Length::Fill);

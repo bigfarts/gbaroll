@@ -312,19 +312,6 @@ fn handle_message(
             room.broadcast_roster();
             true
         }
-        ClientMessage::Chat { text } => {
-            let Some(m) = membership.as_ref() else { return true };
-            let text: String = text.chars().take(512).collect();
-            let rooms = rooms.lock().unwrap();
-            let Some(room) = rooms.get(&m.code) else { return true };
-            let Some(i) = player_idx(room, &m.tx) else { return true };
-            room.broadcast(ServerMessage::Chat {
-                from: i as u8,
-                nick: room.players[i].nick.clone(),
-                text,
-            });
-            true
-        }
         ClientMessage::Start => {
             let Some(m) = membership.as_ref() else { return true };
             let mut rooms = rooms.lock().unwrap();

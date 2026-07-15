@@ -545,7 +545,17 @@ fn drive(
         }
     }
 
-    if let Some(writer) = replay_writer {
+    // Finalize the replay: flush any confirmed ticks the loop's exit
+    // skipped (an unplug/disconnect breaks at the top of the iteration,
+    // before that pass's drain), then write the end-of-replay sentinel so
+    // it reads back complete rather than truncated.
+    if let Some(mut writer) = replay_writer.take() {
+        for (_tick, row) in session.drain_confirmed() {
+            if let Err(e) = writer.push(&row) {
+                log::error!("replay write failed while finalizing: {e}");
+                break;
+            }
+        }
         if let Err(e) = writer.finish() {
             log::error!("failed to finalize replay: {e}");
         }

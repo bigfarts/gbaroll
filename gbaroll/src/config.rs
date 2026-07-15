@@ -29,11 +29,18 @@ pub struct Config {
     pub mapping: Mapping,
 }
 
+/// Folder under the user's Documents that holds ROMs, saves, and
+/// replays — visible and easy to drop files into, the way tango keeps a
+/// `Tango` folder there.
+const DATA_DIR_NAME: &str = "gbaroll";
+
 impl Default for Config {
     fn default() -> Self {
-        let data = project_dirs()
-            .map(|d| d.data_dir().to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
+        // Fall back to ./gbaroll-data if the Documents lookup fails so the
+        // app still runs rather than panicking.
+        let data = directories_next::UserDirs::new()
+            .and_then(|u| u.document_dir().map(|d| d.join(DATA_DIR_NAME)))
+            .unwrap_or_else(|| PathBuf::from("./gbaroll-data"));
         Config {
             nick: "player".to_string(),
             roms_dir: data.join("roms"),
