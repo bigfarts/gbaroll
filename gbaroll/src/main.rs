@@ -11,6 +11,7 @@
 mod config;
 mod library;
 mod net;
+mod nointro;
 mod platform;
 mod session;
 #[cfg(test)]

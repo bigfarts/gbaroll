@@ -32,6 +32,13 @@ pub struct PeerLink {
 /// How long the whole mesh has to come up before we give up.
 const MESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// How long a still-pending edge survives its peer's signaling socket
+/// going away. A peer that finished *its* mesh legitimately leaves the
+/// server while our handshake reply is still in flight — the transport
+/// is already up, so the handshake completes without signaling; only a
+/// peer that actually died leaves the edge dangling past this.
+const DEPARTED_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
 struct Pending {
     pc: PeerConnection,
     remote_description_set: bool,
@@ -220,6 +227,9 @@ where
     }
 
     let mut done: HashMap<usize, PeerLink> = HashMap::new();
+    // Peers whose signaling socket closed while their edge was still
+    // pending, and when the grace clock started.
+    let mut departed: HashMap<usize, std::time::Instant> = HashMap::new();
     while done.len() < num_players - 1 {
         tokio::select! {
             msg = stream.next() => {
@@ -285,7 +295,14 @@ where
                         }
                     }
                     ServerMessage::PeerLeft { player_idx } => {
-                        anyhow::bail!("player {} left during connection setup", player_idx as usize + 1);
+                        let player = player_idx as usize;
+                        // Harmless if that edge is already up (the peer
+                        // finished its mesh and left the server); only
+                        // an edge that stays pending past the grace
+                        // window means the peer really died.
+                        if !done.contains_key(&player) {
+                            departed.entry(player).or_insert_with(std::time::Instant::now);
+                        }
                     }
                     _ => {}
                 }
@@ -301,6 +318,7 @@ where
                 let Some(joined) = joined else { continue };
                 let (player, ctl_tx, ctl_rx, data_tx, data_rx) = joined.context("handshake task died")??;
                 let pending = pendings.remove(&player).context("handshake for unknown peer")?;
+                departed.remove(&player);
                 done.insert(player, PeerLink {
                     player,
                     pc: pending.pc,
@@ -309,6 +327,11 @@ where
                     data_tx,
                     data_rx,
                 });
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+                if let Some((&player, _)) = departed.iter().find(|(_, at)| at.elapsed() > DEPARTED_GRACE) {
+                    anyhow::bail!("player {} left during connection setup", player + 1);
+                }
             }
         }
     }

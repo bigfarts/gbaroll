@@ -26,6 +26,10 @@ struct Player {
     rom_title: String,
     save: Option<Vec<u8>>,
     tx: mpsc::UnboundedSender<ServerMessage>,
+    /// False once the player's socket is gone. Started rooms keep the
+    /// seat (indices are frozen core indices — the signal relay
+    /// addresses by them); lobbies compact instead.
+    connected: bool,
 }
 
 struct Room {
@@ -242,6 +246,7 @@ fn handle_message(
                         rom_title: rom_title.clone(),
                         save: None,
                         tx: tx.clone(),
+                        connected: true,
                     }],
                 },
             );
@@ -288,6 +293,7 @@ fn handle_message(
                 rom_title,
                 save: None,
                 tx: tx.clone(),
+                connected: true,
             });
             log::info!("{addr}: joined room {code}");
             let _ = tx.send(ServerMessage::RoomJoined { code: code.clone() });
@@ -388,7 +394,7 @@ fn handle_message(
                 return true;
             }
             let Some(from) = player_idx(room, &m.tx) else { return true };
-            let Some(target) = room.players.get(to as usize) else {
+            let Some(target) = room.players.get(to as usize).filter(|p| p.connected) else {
                 return true;
             };
             let _ = target.tx.send(ServerMessage::Signal {
@@ -406,16 +412,17 @@ fn leave_room(rooms: &Rooms, m: &Membership) {
     let Some(room) = rooms.get_mut(&m.code) else { return };
     let Some(i) = player_idx(room, &m.tx) else { return };
     if room.started {
-        // Indices are frozen once started (they're core indices); mark
-        // the seat gone so surviving peers can tear down.
-        room.players.remove(i);
+        // Indices are frozen once started (they're core indices, and
+        // the signal relay addresses by them) — tombstone the seat
+        // instead of compacting.
+        room.players[i].connected = false;
         room.broadcast(ServerMessage::PeerLeft { player_idx: i as u8 });
     } else {
         room.players.remove(i);
         room.reset_ready();
         room.broadcast_roster();
     }
-    if room.players.is_empty() {
+    if !room.players.iter().any(|p| p.connected) {
         rooms.remove(&m.code);
         log::info!("room {} closed", m.code);
     }

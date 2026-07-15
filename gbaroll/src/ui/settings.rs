@@ -128,15 +128,24 @@ pub fn view(app: &App) -> Element<'_, Message> {
             dir_row("saves", &config.saves_dir, Message::PickSavesDir),
             dir_row("replays", &config.replays_dir, Message::PickReplaysDir),
             dir_row("No-Intro DATs", &config.dats_dir, Message::PickDatsDir),
-            labeled(
-                "",
-                text(if app.dats.is_empty() {
-                    "no DAT names loaded — drop No-Intro .dat files in the DATs folder and rescan".to_string()
+            labeled("", {
+                let status = if app.dat_downloading {
+                    "downloading the GBA No-Intro DAT…".to_string()
+                } else if let Some(e) = &app.dat_download_error {
+                    format!("DAT download failed: {e}")
+                } else if app.dats.is_empty() {
+                    "no DAT names loaded".to_string()
                 } else {
                     format!("{} name(s) from {} DAT file(s)", app.dats.len(), app.dats.files())
-                })
-                .size(12),
-            ),
+                };
+                let mut download = button(text("download GBA DAT").size(12)).padding([2, 8]);
+                if !app.dat_downloading {
+                    download = download.on_press(Message::DownloadGbaDat);
+                }
+                row![text(status).size(12), download]
+                    .spacing(8)
+                    .align_y(iced::Alignment::Center)
+            }),
         ]
         .spacing(6)
         .into(),

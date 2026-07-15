@@ -152,6 +152,8 @@ pub enum Message {
     PickSavesDir,
     PickReplaysDir,
     PickDatsDir,
+    DownloadGbaDat,
+    DatDownloaded(Result<usize, String>),
     BindingCaptureStart(MappedKey),
     BindingCaptured(PhysicalInput),
     BindingCaptureCancel,
@@ -162,7 +164,9 @@ pub enum Message {
 pub struct App {
     pub config: Config,
     pub library: Library,
-    pub dats: crate::library::DatIndex,
+    pub dats: crate::nointro::DatIndex,
+    pub dat_downloading: bool,
+    pub dat_download_error: Option<String>,
     pub tab: Tab,
     pub notice: Option<String>,
 
@@ -197,9 +201,18 @@ impl App {
         };
         audio_binder.set_volume(config.volume);
 
-        let dats = crate::library::DatIndex::load_dir(&config.dats_dir);
+        let dats = crate::nointro::DatIndex::load_dir(&config.dats_dir);
         let library = Library::scan(&config.roms_dir, &dats);
         let replays = replays::State::scan(&config.replays_dir);
+
+        // First run (no DATs yet): fetch the GBA No-Intro DAT in the
+        // background so names appear without any setup.
+        let mut startup = Task::none();
+        let mut dat_downloading = false;
+        if dats.files() == 0 {
+            dat_downloading = true;
+            startup = download_gba_dat_task(config.dats_dir.clone());
+        }
 
         (
             App {
@@ -210,6 +223,8 @@ impl App {
                 session: None,
                 library,
                 dats,
+                dat_downloading,
+                dat_download_error: None,
                 notice: None,
                 audio_binder,
                 _audio_backend: audio_backend,
@@ -217,7 +232,7 @@ impl App {
                 config,
                 tab: Tab::Play,
             },
-            Task::none(),
+            startup,
         )
     }
 
@@ -288,7 +303,7 @@ impl App {
             Message::LocalPlayersChanged(n) => self.play.local_players = n.clamp(2, 4),
             Message::LocalSaveSelected(choice) => self.play.local_save = choice,
             Message::RescanRoms => {
-                self.dats = crate::library::DatIndex::load_dir(&self.config.dats_dir);
+                self.dats = crate::nointro::DatIndex::load_dir(&self.config.dats_dir);
                 self.library = Library::scan(&self.config.roms_dir, &self.dats);
                 self.play.selected_crc = self
                     .play
@@ -494,8 +509,29 @@ impl App {
                 if let Some(dir) = rfd::FileDialog::new().set_directory(&self.config.dats_dir).pick_folder() {
                     self.config.dats_dir = dir;
                     self.config.save();
-                    self.dats = crate::library::DatIndex::load_dir(&self.config.dats_dir);
+                    self.dats = crate::nointro::DatIndex::load_dir(&self.config.dats_dir);
                     self.library = Library::scan(&self.config.roms_dir, &self.dats);
+                }
+            }
+            Message::DownloadGbaDat => {
+                if !self.dat_downloading {
+                    self.dat_downloading = true;
+                    self.dat_download_error = None;
+                    return download_gba_dat_task(self.config.dats_dir.clone());
+                }
+            }
+            Message::DatDownloaded(result) => {
+                self.dat_downloading = false;
+                match result {
+                    Ok(_) => {
+                        self.dat_download_error = None;
+                        self.dats = crate::nointro::DatIndex::load_dir(&self.config.dats_dir);
+                        self.library = Library::scan(&self.config.roms_dir, &self.dats);
+                    }
+                    Err(e) => {
+                        log::warn!("DAT download failed: {e}");
+                        self.dat_download_error = Some(e);
+                    }
                 }
             }
             Message::PickSavesDir => {
@@ -756,6 +792,12 @@ impl App {
         self.session = Some(session_view::State::new(runtime));
         Ok(())
     }
+}
+
+fn download_gba_dat_task(dats_dir: std::path::PathBuf) -> Task<Message> {
+    Task::perform(crate::nointro::fetch_gba_dat(dats_dir), |result| {
+        Message::DatDownloaded(result.map_err(|e| format!("{e:#}")))
+    })
 }
 
 /// Stable identity for the frame subscription (the notify is

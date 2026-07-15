@@ -35,6 +35,8 @@ futures.workspace = true
 serde.workspace = true
 # No-Intro DAT files (Logiqx XML flavor).
 quick-xml = "0.36"
+# Fetching the GBA No-Intro DAT from the libretro-database mirror.
+reqwest = { version = "0.11", default-features = false, features = ["native-tls"] }
 serde_json.workspace = true
 bincode.workspace = true
 crc32fast.workspace = true
