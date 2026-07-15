@@ -11,6 +11,7 @@ mod replays;
 mod scrubber;
 mod session_view;
 mod settings;
+mod telemetry;
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -133,6 +134,7 @@ pub enum Message {
     SessionFrame,
     SessionInput(crate::platform::input::Event),
     SessionToggleMenu,
+    SessionToggleTelemetry,
     SessionPauseToggled,
     SessionSpeedSelected(SpeedChoice),
     SessionViewPlayerSelected(PlayerChoice),
@@ -404,6 +406,11 @@ impl App {
                     if session.end.is_none() {
                         session.menu_open = !session.menu_open;
                     }
+                }
+            }
+            Message::SessionToggleTelemetry => {
+                if let Some(session) = &mut self.session {
+                    session.telemetry_open = !session.telemetry_open;
                 }
             }
             Message::SessionPauseToggled => {

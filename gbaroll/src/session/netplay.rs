@@ -388,6 +388,9 @@ fn drive(
     // Per peer, when we last heard an input from them — consulted only
     // when the queue watchdog trips, to name the peer that went silent.
     let mut last_heard: Vec<Instant> = peers.iter().map(|_| Instant::now()).collect();
+    // A rolling one-second window of advance times, for the measured TPS
+    // the telemetry panel charts against fps_target.
+    let mut tick_times: VecDeque<Instant> = VecDeque::new();
 
     let end = 'main: loop {
         if shared.quit.load(Ordering::Relaxed) {
@@ -512,6 +515,13 @@ fn drive(
         let fps_target = EXPECTED_FPS - slowdown;
         shared.set_fps_target(fps_target);
 
+        // Measured TPS: advances in the trailing second.
+        let now = Instant::now();
+        tick_times.push_back(now);
+        while tick_times.front().is_some_and(|t| now.duration_since(*t) > std::time::Duration::from_secs(1)) {
+            tick_times.pop_front();
+        }
+
         {
             let mut stats = shared.stats.lock().unwrap();
             stats.queue_len = queue_len as u32;
@@ -519,6 +529,7 @@ fn drive(
             stats.rolled_back = report.rolled_back;
             stats.confirmed = report.confirmed;
             stats.frontier = report.frontier;
+            stats.tps = tick_times.len() as f32;
             stats.fps_target = fps_target;
             stats.peers = peers
                 .iter()

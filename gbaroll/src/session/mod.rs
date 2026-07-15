@@ -116,6 +116,10 @@ pub struct Stats {
     pub rolled_back: u32,
     pub confirmed: u32,
     pub frontier: u32,
+    /// Actually achieved simulated ticks per second (measured over a
+    /// rolling one-second window), as opposed to `fps_target` (the pace
+    /// the throttler is currently asking for).
+    pub tps: f32,
     pub fps_target: f32,
     pub peers: Vec<PeerStat>,
 }

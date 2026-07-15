@@ -32,6 +32,10 @@ pub struct State {
     /// Why the cable last unplugged, shown quietly in the sidebar.
     pub link_notice: Option<String>,
 
+    // The telemetry panel (netplay).
+    pub telemetry_open: bool,
+    metric_history: std::collections::VecDeque<super::telemetry::MetricSample>,
+
     // Scrub-drag bookkeeping (playback only).
     pub scrub_preview: Option<u32>,
     scrub_resume: bool,
@@ -56,6 +60,8 @@ impl State {
             link_open: false,
             link_code: String::new(),
             link_notice: None,
+            telemetry_open: false,
+            metric_history: std::collections::VecDeque::with_capacity(super::telemetry::HISTORY_LEN),
             scrub_preview: None,
             scrub_resume: false,
             scrub_blitted: false,
@@ -77,6 +83,8 @@ impl State {
         self.runtime = runtime;
         self.menu_open = false;
         self.speed_up_held = false;
+        self.telemetry_open = false;
+        self.metric_history.clear();
         self.scrub_preview = None;
         self.scrub_resume = false;
         self.scrub_blitted = false;
@@ -106,6 +114,15 @@ impl State {
         self.end = shared.end.lock().unwrap().clone();
         if self.end.is_some() {
             self.menu_open = false;
+        }
+        // Feed the telemetry ring buffer (netplay only — the other kinds
+        // never produce link stats).
+        if self.runtime.descriptor.kind == SessionKind::Netplay {
+            if self.metric_history.len() == super::telemetry::HISTORY_LEN {
+                self.metric_history.pop_front();
+            }
+            self.metric_history
+                .push_back(super::telemetry::MetricSample::capture(&self.stats));
         }
     }
 
@@ -190,6 +207,8 @@ fn header(state: &State) -> Element<'_, Message> {
     let d = &state.runtime.descriptor;
     let content: Element<'_, Message> = match d.kind {
         SessionKind::Netplay => {
+            // A compact glance line; the full breakdown lives in the
+            // telemetry panel (bottom-right).
             let mut items = row![].spacing(16).align_y(iced::Alignment::Center);
             if let Some(code) = &d.room_code {
                 items = items.push(text(format!("room {code}")).size(13));
@@ -204,13 +223,6 @@ fn header(state: &State) -> Element<'_, Message> {
                     .size(13),
                 );
             }
-            items = items.push(
-                text(format!(
-                    "queue {} · rollback {} · {:.1}fps",
-                    state.stats.queue_len, state.stats.rolled_back, state.stats.fps_target
-                ))
-                .size(13),
-            );
             items.into()
         }
         SessionKind::Local => text("local session — Esc for menu").size(13).into(),
@@ -584,12 +596,16 @@ pub fn view<'a>(
 
     let kind = state.runtime.descriptor.kind;
     let link_open = state.link_open;
+    let telemetry_open = state.telemetry_open;
     let captured = InputCapture::new(body, move |input| {
         if let Input::Keyboard(iced::keyboard::Event::KeyPressed { physical_key, .. }) = &input {
             if *physical_key == Physical::Code(Code::Escape) {
-                // Escape backs out of the link modal first, else the menu.
+                // Escape backs out of the link modal first, then the
+                // telemetry panel, then opens/closes the menu.
                 return Some(if link_open {
                     Message::SessionLinkToggle
+                } else if telemetry_open {
+                    Message::SessionToggleTelemetry
                 } else {
                     Message::SessionToggleMenu
                 });
@@ -602,6 +618,16 @@ pub fn view<'a>(
     });
 
     let mut layers = stack![Element::from(captured)];
+    // The telemetry overlay sits just above the game but below every
+    // modal, and only while nothing else is covering the screen.
+    if kind == SessionKind::Netplay && state.end.is_none() && !state.menu_open && !state.link_open {
+        layers = layers.push(super::telemetry::overlay(
+            &state.metric_history,
+            &state.stats,
+            config.present_delay,
+            state.telemetry_open,
+        ));
+    }
     if state.link_open && link_capable(state) && state.end.is_none() {
         layers = layers.push(link_modal(state, lobby, library));
     }
