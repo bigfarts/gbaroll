@@ -149,10 +149,6 @@ pub struct SharedSession {
     /// UI → netplay drive: pull the cable (end the session, but leave a
     /// handoff for the solo continuation).
     pub unplug: AtomicBool,
-    /// Solo drive → UI: the game has its serial port configured for link
-    /// communication (it's in a link menu, or close enough) — the cue to
-    /// offer the link sidebar.
-    pub link_wanted: AtomicBool,
     /// Drive → UI: why the session ended.
     pub end: Mutex<Option<SessionEnd>>,
     /// Netplay drive → UI: the local machine's continuation, captured at
@@ -181,7 +177,6 @@ impl SharedSession {
             total_ticks: AtomicU32::new(0),
             quit: AtomicBool::new(false),
             unplug: AtomicBool::new(false),
-            link_wanted: AtomicBool::new(false),
             end: Mutex::new(None),
             handoff: Mutex::new(None),
             stats: Mutex::new(Stats::default()),

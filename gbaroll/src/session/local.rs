@@ -139,9 +139,6 @@ fn drive(shared: Arc<SharedSession>, link: Arc<Mutex<Link>>, num_players: usize)
                 last_view = view;
             }
             link.tick(&keys);
-            if num_players == 1 {
-                shared.link_wanted.store(link.sio_comms_active(0), Ordering::Relaxed);
-            }
             if let Some(buf) = link.video_buffer(view) {
                 shared.publish_video(buf);
             }

@@ -31,9 +31,6 @@ pub struct State {
     pub link_code: String,
     /// Why the cable last unplugged, shown quietly in the sidebar.
     pub link_notice: Option<String>,
-    /// Whether the game was asking for a cable last frame — the edge
-    /// detector for auto-opening the sidebar exactly once per ask.
-    pub link_prompted: bool,
 
     // Scrub-drag bookkeeping (playback only).
     pub scrub_preview: Option<u32>,
@@ -59,7 +56,6 @@ impl State {
             link_open: false,
             link_code: String::new(),
             link_notice: None,
-            link_prompted: false,
             scrub_preview: None,
             scrub_resume: false,
             scrub_blitted: false,
@@ -81,7 +77,6 @@ impl State {
         self.runtime = runtime;
         self.menu_open = false;
         self.speed_up_held = false;
-        self.link_prompted = false;
         self.scrub_preview = None;
         self.scrub_resume = false;
         self.scrub_blitted = false;

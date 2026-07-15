@@ -396,18 +396,6 @@ impl App {
             Message::SessionFrame => {
                 if let Some(session) = &mut self.session {
                     session.refresh();
-                    // Offer the cable when the game asks for one (its
-                    // serial port just switched into a comms mode — it
-                    // entered a link menu). Rising edge only: a manual
-                    // close stays closed until the game asks again.
-                    let d = &session.runtime.descriptor;
-                    if d.kind == SessionKind::Local && d.num_players == 1 {
-                        let wanted = session.runtime.shared.link_wanted.load(Ordering::Relaxed);
-                        if wanted && !session.link_prompted && self.lobby.is_none() {
-                            session.link_open = true;
-                        }
-                        session.link_prompted = wanted;
-                    }
                     // A netplay end that leaves a live machine behind is a
                     // cable unplug: continue solo instead of a dead end.
                     if session.runtime.descriptor.kind == SessionKind::Netplay {
