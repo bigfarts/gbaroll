@@ -14,10 +14,19 @@ use std::sync::{Arc, Mutex};
 /// GBA cycles per second / cycles per frame — the exact tick rate.
 pub const EXPECTED_FPS: f32 = 16777216.0 / 280896.0;
 
-/// Local inputs buffered without confirmation before the drive loop
-/// stops advancing (the peer is stalled or gone; keep the horizon
-/// recoverable).
-pub const STALL_QUEUE_LENGTH: usize = 180;
+/// The netplay queue watchdog's trip depth: local inputs buffered with
+/// nothing from a peer to match them before the link is declared dead
+/// and the cable unplugs. A dead link keeps the throttled sim committing
+/// ~one local input per displayed frame (the throttler caps its
+/// slowdown, so it never fully stalls), so the local queue climbs
+/// steadily; watching the queue itself — the resource that would
+/// overflow — rather than a silence duration means the trip always fires
+/// a fixed margin below the transport horizon (`HORIZON` = 600) no
+/// matter how fast the throttled sim actually grows it. One delivered
+/// datagram carries the peer's whole redundancy window, so anything
+/// short of ~3s of total silence refills the queue instantly and never
+/// trips. 180 frames ≈ 3s of play.
+pub const UNPLUG_QUEUE_LENGTH: usize = 180;
 
 /// Sleep quantum while stalled or paused.
 pub const PAUSED_TICK: std::time::Duration = std::time::Duration::from_millis(10);
@@ -54,10 +63,42 @@ impl LinkAccess {
 #[derive(Debug, Clone)]
 pub enum SessionEnd {
     LocalQuit,
+    /// The local player pulled the cable: the netplay session ends but the
+    /// local machine continues solo (see [`SharedSession::handoff`]).
+    Unplugged,
     PeerQuit { player: usize },
     PeerDisconnected { player: usize },
     Desync { tick: u32 },
     Error(String),
+}
+
+impl SessionEnd {
+    /// Whether the local machine survives this end — netplay teardown is a
+    /// cable unplug, not a power-off, so anything short of a local quit or
+    /// a dead emulator leaves a machine to keep playing.
+    pub fn unplugs(&self) -> bool {
+        matches!(
+            self,
+            SessionEnd::Unplugged
+                | SessionEnd::PeerQuit { .. }
+                | SessionEnd::PeerDisconnected { .. }
+                | SessionEnd::Desync { .. }
+        )
+    }
+}
+
+/// The local side's continuation material when a netplay session ends:
+/// everything a solo session needs to keep the machine running (the cable
+/// unplugs, the game goes on).
+pub struct Handoff {
+    pub rom: Vec<u8>,
+    /// Serialized core state (`Link::capture_boot_state`).
+    pub state: Vec<u8>,
+    /// SRAM/flash image at teardown.
+    pub save: Option<Vec<u8>>,
+    /// The session's pinned cart clock, carried into the continuation so
+    /// RTC games don't see time jump.
+    pub rtc_unix_micros: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -105,8 +146,18 @@ pub struct SharedSession {
     pub total_ticks: AtomicU32,
     /// UI → drive: end the session.
     pub quit: AtomicBool,
+    /// UI → netplay drive: pull the cable (end the session, but leave a
+    /// handoff for the solo continuation).
+    pub unplug: AtomicBool,
+    /// Solo drive → UI: the game has its serial port configured for link
+    /// communication (it's in a link menu, or close enough) — the cue to
+    /// offer the link sidebar.
+    pub link_wanted: AtomicBool,
     /// Drive → UI: why the session ended.
     pub end: Mutex<Option<SessionEnd>>,
+    /// Netplay drive → UI: the local machine's continuation, captured at
+    /// teardown whenever the end [`unplugs`](SessionEnd::unplugs).
+    pub handoff: Mutex<Option<Handoff>>,
     pub stats: Mutex<Stats>,
     /// Signaled once per presented frame; the UI subscription awaits it
     /// to redraw in lockstep with the emulator instead of on a timer.
@@ -129,7 +180,10 @@ impl SharedSession {
             position: AtomicU32::new(0),
             total_ticks: AtomicU32::new(0),
             quit: AtomicBool::new(false),
+            unplug: AtomicBool::new(false),
+            link_wanted: AtomicBool::new(false),
             end: Mutex::new(None),
+            handoff: Mutex::new(None),
             stats: Mutex::new(Stats::default()),
             frame_notify,
         })
@@ -178,11 +232,18 @@ pub struct SessionDescriptor {
     pub nicks: Vec<String>,
     pub room_code: Option<String>,
     pub replay_path: Option<std::path::PathBuf>,
+    /// The local player's ROM identity, for opening a lobby from a
+    /// running session (`None` for playback).
+    pub rom_crc32: Option<u32>,
 }
 
 pub struct SessionRuntime {
     pub shared: Arc<SharedSession>,
     pub descriptor: SessionDescriptor,
+    /// Local sessions only: the live link, for the plug-in path to
+    /// capture the machine (pause first; the capture must be the state
+    /// the session freezes on).
+    pub link: Option<LinkAccess>,
     /// Playback-only: the seek controller + snapshot stores the scrub
     /// UI drives.
     pub playback: Option<playback::PlaybackHandles>,
@@ -193,6 +254,15 @@ pub struct SessionRuntime {
     /// worker so it can exit).
     pre_join: Option<Box<dyn FnOnce() + Send>>,
     threads: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl SessionRuntime {
+    /// Unbind this session's audio ahead of a runtime swap: the audio slot
+    /// is app-global and `bind` refuses while it's held, so the incoming
+    /// runtime can only get sound if the outgoing one lets go first.
+    pub fn release_audio(&mut self) {
+        self._audio = None;
+    }
 }
 
 impl Drop for SessionRuntime {

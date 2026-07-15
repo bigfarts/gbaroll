@@ -1,17 +1,19 @@
 //! The fullscreen session view: the framebuffer shader widget (integer
 //! or fit scaling), a kind-specific header/footer (netplay stats,
-//! playback transport with async scrubbing), input capture, and the
-//! Esc menu / end-of-session overlays.
+//! playback transport with async scrubbing), input capture, the link
+//! sidebar (host/join a room next to the running game, roster while
+//! linked), and the Esc menu / end-of-session overlays.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use iced::keyboard::key::{Code, Physical};
-use iced::widget::{button, column, container, pick_list, row, slider, stack, text};
+use iced::widget::{button, column, container, pick_list, row, slider, stack, text, text_input};
 use iced::{Element, Length, Theme};
 
 use super::{Message, PlayerChoice, SpeedChoice, PADDING, SPEED_CHOICES};
 use crate::config::Config;
+use crate::library::Library;
 use crate::platform::input::HeldState;
 use crate::platform::input_capture::{Input, InputCapture};
 use crate::platform::video::framebuffer;
@@ -23,6 +25,15 @@ pub struct State {
     pub menu_open: bool,
     pub selected_speed: u32,
     pub speed_up_held: bool,
+
+    // The link sidebar.
+    pub link_open: bool,
+    pub link_code: String,
+    /// Why the cable last unplugged, shown quietly in the sidebar.
+    pub link_notice: Option<String>,
+    /// Whether the game was asking for a cable last frame — the edge
+    /// detector for auto-opening the sidebar exactly once per ask.
+    pub link_prompted: bool,
 
     // Scrub-drag bookkeeping (playback only).
     pub scrub_preview: Option<u32>,
@@ -45,6 +56,10 @@ impl State {
             menu_open: false,
             selected_speed: 100,
             speed_up_held: false,
+            link_open: false,
+            link_code: String::new(),
+            link_notice: None,
+            link_prompted: false,
             scrub_preview: None,
             scrub_resume: false,
             scrub_blitted: false,
@@ -54,6 +69,25 @@ impl State {
             seen_revision: 0,
             frame_revision: 0,
         }
+    }
+
+    /// Swap the underlying runtime in place — the plug-in / unplug
+    /// transitions. The old runtime drops here (joining its drive
+    /// thread); the view keeps its held input and the last frame, so the
+    /// machine appears continuous across the swap. The caller must have
+    /// [released](SessionRuntime::release_audio) the old runtime's audio
+    /// before booting the new one.
+    pub fn swap_runtime(&mut self, runtime: SessionRuntime) {
+        self.runtime = runtime;
+        self.menu_open = false;
+        self.speed_up_held = false;
+        self.link_prompted = false;
+        self.scrub_preview = None;
+        self.scrub_resume = false;
+        self.scrub_blitted = false;
+        self.stats = Stats::default();
+        self.end = None;
+        self.seen_revision = 0;
     }
 
     /// Pull the newest published frame + stats + end state. Called on
@@ -248,23 +282,57 @@ fn transport(state: &State) -> Element<'_, Message> {
             .padding([4, 8])
             .into()
         }
-        SessionKind::Local => row![
-            button(text(if state.playing() { "⏸" } else { "▶" }))
-                .padding([4, 10])
-                .on_press(Message::SessionPauseToggled),
-            pick_list(
-                player_choices(state),
-                Some(current_player_choice(state)),
-                Message::SessionViewPlayerSelected
-            ),
-            text("controls follow the selected player").size(12),
+        SessionKind::Local => {
+            let mut items = row![
+                button(text(if state.playing() { "⏸" } else { "▶" }))
+                    .padding([4, 10])
+                    .on_press(Message::SessionPauseToggled),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
+            if d.num_players > 1 {
+                items = items
+                    .push(pick_list(
+                        player_choices(state),
+                        Some(current_player_choice(state)),
+                        Message::SessionViewPlayerSelected,
+                    ))
+                    .push(text("controls follow the selected player").size(12));
+            }
+            items = items.push(iced::widget::Space::new().width(Length::Fill));
+            if link_capable(state) {
+                items = items.push(link_toggle(state));
+            }
+            items.padding([4, 8]).into()
+        }
+        SessionKind::Netplay => row![
+            text("Esc for menu").size(12),
+            iced::widget::Space::new().width(Length::Fill),
+            link_toggle(state),
         ]
-        .spacing(8)
         .align_y(iced::Alignment::Center)
         .padding([4, 8])
         .into(),
-        SessionKind::Netplay => row![text("Esc for menu").size(12)].padding([4, 8]).into(),
     }
+}
+
+/// Whether this session has a cable port the sidebar manages: solo local
+/// sessions (a free port to plug into) and netplay sessions (a live
+/// cable to unplug).
+fn link_capable(state: &State) -> bool {
+    match state.runtime.descriptor.kind {
+        SessionKind::Local => state.runtime.descriptor.num_players == 1,
+        SessionKind::Netplay => true,
+        SessionKind::Playback => false,
+    }
+}
+
+fn link_toggle(state: &State) -> Element<'_, Message> {
+    button(text("Link").size(13))
+        .padding([4, 10])
+        .style(if state.link_open { button::primary } else { button::secondary })
+        .on_press(Message::SessionLinkToggle)
+        .into()
 }
 
 fn current_player_choice(state: &State) -> PlayerChoice {
@@ -382,6 +450,7 @@ fn end_overlay(state: &State) -> Element<'_, Message> {
     };
     let message = match end {
         SessionEnd::LocalQuit => "Session ended.".to_string(),
+        SessionEnd::Unplugged => "Unplugged.".to_string(),
         SessionEnd::PeerQuit { player } => format!("{} left the session.", nick_of(*player)),
         SessionEnd::PeerDisconnected { player } => format!("Connection to {} lost.", nick_of(*player)),
         SessionEnd::Desync { tick } => format!("Desync detected at tick {tick} — session aborted."),
@@ -398,7 +467,95 @@ fn end_overlay(state: &State) -> Element<'_, Message> {
     )
 }
 
-pub fn view<'a>(state: &'a State, config: &'a Config) -> Element<'a, Message> {
+/// The link sidebar: the lobby while a room is up, the live roster +
+/// unplug while the cable is in, and host/join otherwise.
+fn link_sidebar<'a>(
+    state: &'a State,
+    lobby: Option<&'a super::lobby::State>,
+    library: &'a Library,
+) -> Element<'a, Message> {
+    let d = &state.runtime.descriptor;
+    let content: Element<'a, Message> = if let Some(lobby) = lobby {
+        super::lobby::sidebar(lobby, library)
+    } else if d.kind == SessionKind::Netplay {
+        let mut peers = column![].spacing(2);
+        for peer in &state.stats.peers {
+            peers = peers.push(
+                text(format!(
+                    "{}: {}",
+                    peer.nick,
+                    peer.rtt_ms.map(|ms| format!("{ms:.0}ms")).unwrap_or_else(|| "…".into())
+                ))
+                .size(12),
+            );
+        }
+        column![
+            text(format!(
+                "Linked — room {}",
+                d.room_code.clone().unwrap_or_default()
+            ))
+            .size(15),
+            peers,
+            iced::widget::Space::new().height(Length::Fill),
+            button(text("Unplug").size(13)).style(button::danger).on_press(Message::SessionUnplug),
+            text("your game continues on its own after unplugging").size(11),
+        ]
+        .spacing(8)
+        .height(Length::Fill)
+        .into()
+    } else {
+        let mut panel = column![text("Link cable").size(15)].spacing(8);
+        if let Some(notice) = &state.link_notice {
+            panel = panel.push(text(notice.clone()).size(12).style(|theme: &Theme| text::Style {
+                color: Some(theme.extended_palette().danger.base.color),
+            }));
+        }
+        panel = panel.push(
+            text("Host a room or join one — the cable plugs into the running game when the room starts.").size(11),
+        );
+        panel = panel.push(button(text("Host a room").size(13)).padding(8).on_press(Message::LinkHostClicked));
+        panel = panel.push(
+            row![
+                text_input("room code", &state.link_code)
+                    .on_input(Message::LinkCodeChanged)
+                    .on_submit(Message::LinkJoinClicked)
+                    .padding(6)
+                    .size(13),
+                button(text("Join").size(13)).padding(8).on_press(Message::LinkJoinClicked),
+            ]
+            .spacing(6)
+            .align_y(iced::Alignment::Center),
+        );
+        panel.height(Length::Fill).into()
+    };
+
+    container(
+        container(content)
+            .padding(PADDING)
+            .width(Length::Fixed(300.0))
+            .height(Length::Fill)
+            .style(|theme: &Theme| container::Style {
+                background: Some(iced::Background::Color(theme.extended_palette().background.base.color)),
+                border: iced::Border {
+                    width: 1.0,
+                    color: theme.extended_palette().background.strong.color,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_x(iced::alignment::Horizontal::Right)
+    .into()
+}
+
+pub fn view<'a>(
+    state: &'a State,
+    lobby: Option<&'a super::lobby::State>,
+    library: &'a Library,
+    config: &'a Config,
+) -> Element<'a, Message> {
     let show_header = config.show_hud || state.runtime.descriptor.kind != SessionKind::Netplay;
     let mut body = column![];
     if show_header {
@@ -420,11 +577,14 @@ pub fn view<'a>(state: &'a State, config: &'a Config) -> Element<'a, Message> {
         input.to_event().map(Message::SessionInput)
     });
 
-    if state.end.is_some() {
-        stack![Element::from(captured), end_overlay(state)].into()
-    } else if state.menu_open {
-        stack![Element::from(captured), menu_overlay(state, config)].into()
-    } else {
-        captured.into()
+    let mut layers = stack![Element::from(captured)];
+    if (state.link_open || lobby.is_some()) && link_capable(state) && state.end.is_none() {
+        layers = layers.push(link_sidebar(state, lobby, library));
     }
+    if state.end.is_some() {
+        layers = layers.push(end_overlay(state));
+    } else if state.menu_open {
+        layers = layers.push(menu_overlay(state, config));
+    }
+    layers.into()
 }

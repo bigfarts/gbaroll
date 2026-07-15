@@ -1,5 +1,8 @@
-//! The iced application: tab shell (Play / Replays / Settings), the
-//! lobby, and the fullscreen session view.
+//! The iced application: tab shell (Play / Replays / Settings) and the
+//! fullscreen session view. Netplay is not a separate flow — a running
+//! solo session hosts/joins a room from its link sidebar, the cable
+//! plugs in when the room starts (runtime swap to netplay), and any
+//! netplay teardown unplugs back to solo.
 
 mod lobby;
 mod play;
@@ -57,7 +60,9 @@ impl SaveChoice {
             SaveChoice::Fresh => None,
             SaveChoice::File(p) => {
                 let bytes = std::fs::read(p)?;
-                if bytes.len() > gbaroll_signaling::MAX_SAVE_SIZE {
+                // GBA flash tops out at 128 KiB; leave headroom for
+                // emulator save footers.
+                if bytes.len() > 512 * 1024 {
                     anyhow::bail!("save file too large");
                 }
                 Some(bytes)
@@ -105,17 +110,20 @@ pub enum Message {
     // Play tab.
     PlaySearchChanged(String),
     PlayRomSelected(u32),
-    JoinCodeChanged(String),
     LocalPlayersChanged(usize),
     LocalSaveSelected(SaveChoice),
-    HostClicked,
-    JoinClicked,
     LocalClicked,
     RescanRoms,
 
-    // Lobby.
+    // The link sidebar (host/join a room from a running solo session).
+    SessionLinkToggle,
+    LinkCodeChanged(String),
+    LinkHostClicked,
+    LinkJoinClicked,
+    SessionUnplug,
+
+    // Lobby (inside the sidebar).
     LobbyPoll,
-    LobbySaveSelected(SaveChoice),
     LobbyReadyToggled(bool),
     LobbyChatChanged(String),
     LobbyChatSubmitted,
@@ -264,6 +272,8 @@ impl App {
     }
 
     fn close_session(&mut self) {
+        // A lobby can't outlive the session it would plug into.
+        self.lobby = None;
         // Dropping the runtime asks the drive thread to quit and joins
         // it (a deliberate quit also announces itself to the peers).
         self.session = None;
@@ -299,8 +309,7 @@ impl App {
             // ---- play tab ----
             Message::PlaySearchChanged(s) => self.play.search = s,
             Message::PlayRomSelected(crc) => self.play.selected_crc = Some(crc),
-            Message::JoinCodeChanged(code) => self.play.join_code = code.to_ascii_uppercase(),
-            Message::LocalPlayersChanged(n) => self.play.local_players = n.clamp(2, 4),
+            Message::LocalPlayersChanged(n) => self.play.local_players = n.clamp(1, 4),
             Message::LocalSaveSelected(choice) => self.play.local_save = choice,
             Message::RescanRoms => {
                 self.dats = crate::nointro::DatIndex::load_dir(&self.config.dats_dir);
@@ -310,54 +319,50 @@ impl App {
                     .selected_crc
                     .filter(|crc| self.library.by_crc32(*crc).is_some());
             }
-            Message::HostClicked => self.start_lobby(crate::net::lobby::LobbyMode::Create),
-            Message::JoinClicked => {
-                let code = gbaroll_signaling::normalize_room_code(&self.play.join_code);
+            Message::LocalClicked => {
+                if let Err(e) = self.start_local() {
+                    self.notice(format!("couldn't start session: {e:#}"));
+                }
+            }
+
+            // ---- link sidebar ----
+            Message::SessionLinkToggle => {
+                if let Some(session) = &mut self.session {
+                    session.link_open = !session.link_open;
+                }
+            }
+            Message::LinkCodeChanged(code) => {
+                if let Some(session) = &mut self.session {
+                    session.link_code = code.to_ascii_uppercase();
+                }
+            }
+            Message::LinkHostClicked => self.start_lobby(crate::net::lobby::LobbyMode::Create),
+            Message::LinkJoinClicked => {
+                let code = self
+                    .session
+                    .as_ref()
+                    .map(|s| gbaroll_signaling::normalize_room_code(&s.link_code))
+                    .unwrap_or_default();
                 if code.is_empty() {
-                    self.notice("enter a room code to join");
+                    if let Some(session) = &mut self.session {
+                        session.link_notice = Some("enter a room code to join".to_string());
+                    }
                 } else {
                     self.start_lobby(crate::net::lobby::LobbyMode::Join { code });
                 }
             }
-            Message::LocalClicked => {
-                if let Err(e) = self.start_local() {
-                    self.notice(format!("couldn't start local session: {e:#}"));
+            Message::SessionUnplug => {
+                if let Some(session) = &self.session {
+                    session.runtime.shared.unplug.store(true, Ordering::Relaxed);
                 }
             }
 
             // ---- lobby ----
             Message::LobbyPoll => self.poll_lobby(),
-            Message::LobbySaveSelected(choice) => {
-                if let Some(lobby) = &mut self.lobby {
-                    lobby.save_choice = choice;
-                    // Changing the save un-readies us.
-                    if lobby.my_ready {
-                        lobby.my_ready = false;
-                        lobby.handle.send(LobbyCommand::SetReady {
-                            ready: false,
-                            save: None,
-                        });
-                    }
-                }
-            }
             Message::LobbyReadyToggled(ready) => {
-                let Some(lobby) = &mut self.lobby else {
-                    return Task::none();
-                };
-                if ready {
-                    match lobby.save_choice.read() {
-                        Ok(save) => {
-                            lobby.my_ready = true;
-                            lobby.handle.send(LobbyCommand::SetReady { ready: true, save });
-                        }
-                        Err(e) => self.notice(format!("couldn't read save: {e:#}")),
-                    }
-                } else {
-                    lobby.my_ready = false;
-                    lobby.handle.send(LobbyCommand::SetReady {
-                        ready: false,
-                        save: None,
-                    });
+                if let Some(lobby) = &mut self.lobby {
+                    lobby.my_ready = ready;
+                    lobby.handle.send(LobbyCommand::SetReady { ready });
                 }
             }
             Message::LobbyChatChanged(s) => {
@@ -374,22 +379,44 @@ impl App {
                 }
             }
             Message::LobbyStartClicked => {
-                let Some(lobby) = &self.lobby else {
-                    return Task::none();
-                };
-                match lobby.save_choice.read() {
-                    Ok(save) => lobby.handle.send(LobbyCommand::Start { save }),
-                    Err(e) => self.notice(format!("couldn't read save: {e:#}")),
+                if let Some(lobby) = &self.lobby {
+                    lobby.handle.send(LobbyCommand::Start);
                 }
             }
             Message::LobbyLeaveClicked => {
                 self.lobby = None; // Drop sends Leave.
+                // If the start already froze the machine for its capture,
+                // let it run again.
+                if let Some(session) = &self.session {
+                    session.runtime.shared.paused.store(false, Ordering::Relaxed);
+                }
             }
 
             // ---- session ----
             Message::SessionFrame => {
                 if let Some(session) = &mut self.session {
                     session.refresh();
+                    // Offer the cable when the game asks for one (its
+                    // serial port just switched into a comms mode — it
+                    // entered a link menu). Rising edge only: a manual
+                    // close stays closed until the game asks again.
+                    let d = &session.runtime.descriptor;
+                    if d.kind == SessionKind::Local && d.num_players == 1 {
+                        let wanted = session.runtime.shared.link_wanted.load(Ordering::Relaxed);
+                        if wanted && !session.link_prompted && self.lobby.is_none() {
+                            session.link_open = true;
+                        }
+                        session.link_prompted = wanted;
+                    }
+                    // A netplay end that leaves a live machine behind is a
+                    // cable unplug: continue solo instead of a dead end.
+                    if session.runtime.descriptor.kind == SessionKind::Netplay {
+                        if let Some(end) = session.end.clone() {
+                            if end.unplugs() {
+                                self.unplug_continue(&end);
+                            }
+                        }
+                    }
                 }
             }
             Message::SessionInput(event) => {
@@ -578,7 +605,7 @@ impl App {
 
     pub fn view(&self) -> Element<'_, Message> {
         if let Some(session) = &self.session {
-            return session_view::view(session, &self.config);
+            return session_view::view(session, self.lobby.as_ref(), &self.library, &self.config);
         }
 
         let tab_button = |label: &'static str, tab: Tab| {
@@ -629,13 +656,7 @@ impl App {
         }
 
         let body: Element<'_, Message> = match self.tab {
-            Tab::Play => {
-                if let Some(lobby) = &self.lobby {
-                    lobby::view(lobby, &self.library, &self.config.saves_dir)
-                } else {
-                    play::view(self)
-                }
-            }
+            Tab::Play => play::view(self),
             Tab::Replays => replays::view(self),
             Tab::Settings => settings::view(self),
         };
@@ -647,14 +668,22 @@ impl App {
         self.play.selected_crc.and_then(|crc| self.library.by_crc32(crc))
     }
 
+    /// Open a room from the running solo session's sidebar. The game
+    /// keeps running; the cable plugs in when the room starts.
     fn start_lobby(&mut self, mode: crate::net::lobby::LobbyMode) {
-        let Some(rom) = self.selected_rom() else {
-            self.notice("pick your ROM first");
-            return;
-        };
         if self.lobby.is_some() {
             return;
         }
+        let Some(session) = &mut self.session else { return };
+        let rom = session
+            .runtime
+            .descriptor
+            .rom_crc32
+            .and_then(|crc| self.library.by_crc32(crc));
+        let Some(rom) = rom else {
+            session.link_notice = Some("this game's ROM is missing from the library".to_string());
+            return;
+        };
         let handle = crate::net::lobby::spawn(crate::net::lobby::LobbyArgs {
             server_url: self.config.signaling_server.clone(),
             nick: self.config.nick.clone(),
@@ -663,16 +692,19 @@ impl App {
             mode,
         });
         self.lobby = Some(lobby::State::new(handle));
-        self.tab = Tab::Play;
+        session.link_notice = None;
+        session.link_open = true;
     }
 
     fn start_local(&mut self) -> anyhow::Result<()> {
         let rom = self.selected_rom().ok_or_else(|| anyhow::anyhow!("pick a ROM first"))?;
+        let rom_crc32 = rom.crc32;
         let bytes = crate::library::read_rom(rom)?;
         let save = self.play.local_save.read()?;
         let runtime = crate::session::local::start(
             crate::session::local::LocalArgs {
                 roms: vec![bytes; self.play.local_players],
+                rom_crc32,
                 save,
             },
             &self.audio_binder,
@@ -680,6 +712,29 @@ impl App {
         )?;
         self.session = Some(session_view::State::new(runtime));
         Ok(())
+    }
+
+    /// Capture the running solo machine for the plug-in exchange,
+    /// freezing it on exactly the captured state (this is what every
+    /// peer — us included — boots the link from).
+    fn capture_boot(session: Option<&session_view::State>) -> anyhow::Result<Vec<u8>> {
+        let session = session.ok_or_else(|| anyhow::anyhow!("the game ended"))?;
+        let link = session
+            .runtime
+            .link
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("this session's machine can't be captured"))?;
+        session.runtime.shared.paused.store(true, Ordering::Relaxed);
+        let blob = link
+            .with_link(|link| {
+                let state = link.capture_boot_state(0)?;
+                Ok::<_, mgba::Error>(crate::net::protocol::BootBlob {
+                    state,
+                    save: link.export_save(0),
+                })
+            })
+            .ok_or_else(|| anyhow::anyhow!("machine unavailable"))??;
+        blob.encode()
     }
 
     fn poll_lobby(&mut self) {
@@ -705,6 +760,18 @@ impl App {
                 LobbyEvent::Error(message) => {
                     lobby.status = Some(message);
                 }
+                LobbyEvent::Starting => {
+                    // The cable is being plugged in: freeze the machine
+                    // and ship its capture (self.session is a disjoint
+                    // field, so borrowing it here is fine).
+                    match Self::capture_boot(self.session.as_ref()) {
+                        Ok(blob) => lobby.handle.send(LobbyCommand::Boot(blob)),
+                        Err(e) => {
+                            fatal = Some(format!("couldn't capture the machine: {e:#}"));
+                            break;
+                        }
+                    }
+                }
                 LobbyEvent::Connecting(message) => {
                     lobby.connecting = true;
                     lobby.status = Some(message);
@@ -721,18 +788,34 @@ impl App {
         }
         if let Some(message) = fatal {
             self.lobby = None;
-            self.notice(message);
+            self.link_failed(message);
             return;
         }
         if let Some(bundle) = bundle {
             self.lobby = None;
-            if let Err(e) = self.start_netplay(*bundle) {
-                self.notice(format!("couldn't start session: {e:#}"));
+            if let Err(e) = self.plug_in(*bundle) {
+                self.link_failed(format!("couldn't plug in: {e:#}"));
             }
         }
     }
 
-    fn start_netplay(&mut self, bundle: crate::net::lobby::SessionBundle) -> anyhow::Result<()> {
+    /// A lobby or plug-in failure: let the (possibly frozen) game run
+    /// again and surface the reason in the sidebar.
+    fn link_failed(&mut self, message: String) {
+        log::warn!("{message}");
+        if let Some(session) = &mut self.session {
+            session.runtime.shared.paused.store(false, Ordering::Relaxed);
+            session.link_notice = Some(message);
+            session.link_open = true;
+        } else {
+            self.notice(message);
+        }
+    }
+
+    /// The cable plugs in: swap the frozen solo runtime for a netplay
+    /// runtime booted from the exchanged captures. The view (and the
+    /// player's held keys) carry across the swap.
+    fn plug_in(&mut self, bundle: crate::net::lobby::SessionBundle) -> anyhow::Result<()> {
         let mut roms = Vec::new();
         let mut rom_meta = Vec::new();
         for player in &bundle.players {
@@ -746,6 +829,12 @@ impl App {
             roms.push(crate::library::read_rom(info)?);
             rom_meta.push((info.crc32, info.title.clone(), info.code.clone()));
         }
+        let session = self
+            .session
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("the game ended before the cable plugged in"))?;
+        // The audio slot must free up before the netplay runtime binds.
+        session.runtime.release_audio();
         let runtime = crate::session::netplay::start(
             crate::session::netplay::NetplayArgs {
                 bundle,
@@ -757,8 +846,55 @@ impl App {
             &self.audio_binder,
             self.frame_notify.clone(),
         )?;
-        self.session = Some(session_view::State::new(runtime));
+        session.swap_runtime(runtime);
+        session.link_notice = None;
+        session.link_open = true;
+        self.apply_joyflags();
         Ok(())
+    }
+
+    /// The cable unplugs: swap the finished netplay runtime for a solo
+    /// continuation of the local machine, and note why in the sidebar.
+    fn unplug_continue(&mut self, end: &crate::session::SessionEnd) {
+        use crate::session::SessionEnd;
+        let Some(session) = &mut self.session else { return };
+        let Some(handoff) = session.runtime.shared.handoff.lock().unwrap().take() else {
+            // No continuation material (the capture failed): leave the
+            // end overlay to say what happened.
+            return;
+        };
+        let nick_of = |player: usize| {
+            session
+                .runtime
+                .descriptor
+                .nicks
+                .get(player)
+                .cloned()
+                .unwrap_or_else(|| format!("player {}", player + 1))
+        };
+        let reason = match end {
+            SessionEnd::Unplugged => "Unplugged.".to_string(),
+            SessionEnd::PeerQuit { player } => format!("{} unplugged.", nick_of(*player)),
+            SessionEnd::PeerDisconnected { player } => format!("Connection to {} lost.", nick_of(*player)),
+            SessionEnd::Desync { tick } => format!("Desync at tick {tick} — cable unplugged."),
+            _ => "Unplugged.".to_string(),
+        };
+        let rom_crc32 = session.runtime.descriptor.rom_crc32.unwrap_or_default();
+        session.runtime.release_audio();
+        match crate::session::local::resume(handoff, rom_crc32, &self.audio_binder, self.frame_notify.clone()) {
+            Ok(runtime) => {
+                session.swap_runtime(runtime);
+                session.link_notice = Some(reason);
+                session.link_open = true;
+                self.apply_joyflags();
+                // The netplay session recorded a replay on the way out.
+                self.replays = replays::State::scan(&self.config.replays_dir);
+            }
+            Err(e) => {
+                // Fall back to the end overlay.
+                log::error!("couldn't continue solo after the unplug: {e:#}");
+            }
+        }
     }
 
     fn watch_replay(&mut self, index: usize) -> anyhow::Result<()> {

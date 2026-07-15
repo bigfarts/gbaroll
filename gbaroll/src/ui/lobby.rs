@@ -1,11 +1,13 @@
-//! The lobby: room code, player slots (with per-player ROM identity and
-//! "do I have that ROM?" checks), save commitment behind the ready flag,
-//! chat, and the host's start button.
+//! Lobby state + the sidebar panel it renders as. The lobby lives inside
+//! a running solo session's link sidebar: room code, player slots (with
+//! per-player ROM identity and "do I have that ROM?" checks), ready
+//! flags, chat, and the host's start button — the game keeps running
+//! next to it until the cable plugs in.
 
-use iced::widget::{button, checkbox, column, container, pick_list, row, scrollable, text, text_input};
+use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input};
 use iced::{Element, Length, Theme};
 
-use super::{Message, SaveChoice, PADDING};
+use super::Message;
 use crate::library::Library;
 use crate::net::lobby::LobbyHandle;
 
@@ -15,7 +17,6 @@ pub struct State {
     pub players: Vec<gbaroll_signaling::PlayerInfo>,
     pub my_idx: usize,
     pub my_ready: bool,
-    pub save_choice: SaveChoice,
     pub chat: Vec<(String, String)>,
     pub chat_input: String,
     pub status: Option<String>,
@@ -30,7 +31,6 @@ impl State {
             players: Vec::new(),
             my_idx: 0,
             my_ready: false,
-            save_choice: SaveChoice::Fresh,
             chat: Vec::new(),
             chat_input: String::new(),
             status: None,
@@ -39,30 +39,18 @@ impl State {
     }
 }
 
-pub fn view<'a>(state: &'a State, library: &'a Library, saves_dir: &std::path::Path) -> Element<'a, Message> {
-    if state.connecting {
-        return container(
-            column![
-                text("Connecting to peers…").size(22),
-                text(state.status.clone().unwrap_or_default()).size(14),
-            ]
-            .spacing(8)
-            .align_x(iced::Alignment::Center),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(iced::alignment::Horizontal::Center)
-        .align_y(iced::alignment::Vertical::Center)
-        .into();
-    }
-
+/// The lobby's sidebar content (the surrounding panel chrome belongs to
+/// the session view).
+pub fn sidebar<'a>(state: &'a State, library: &'a Library) -> Element<'a, Message> {
     let header = row![
         column![
-            text("Room").size(13),
-            text(state.code.clone().unwrap_or_else(|| "…".to_string())).size(30),
+            text("Room").size(12),
+            text(state.code.clone().unwrap_or_else(|| "…".to_string())).size(22),
         ],
         iced::widget::Space::new().width(Length::Fill),
-        button(text("Leave")).style(button::danger).on_press(Message::LobbyLeaveClicked),
+        button(text("Leave").size(13))
+            .style(button::danger)
+            .on_press(Message::LobbyLeaveClicked),
     ]
     .align_y(iced::Alignment::Center);
 
@@ -75,30 +63,24 @@ pub fn view<'a>(state: &'a State, library: &'a Library, saves_dir: &std::path::P
         have_all_roms &= have_rom;
         let marker = if i == state.my_idx { " (you)" } else { "" };
         let rom_status = if have_rom {
-            text("✓ have this ROM").size(12)
+            text("✓").size(11)
         } else {
-            text("✗ missing this ROM").size(12).style(|theme: &Theme| text::Style {
+            text("✗ missing ROM").size(11).style(|theme: &Theme| text::Style {
                 color: Some(theme.extended_palette().danger.base.color),
             })
         };
         slots = slots.push(
             container(
-                row![
-                    text(format!("P{}", i + 1)).size(16).width(Length::Fixed(36.0)),
-                    column![
-                        text(format!("{}{marker}", player.nick)),
-                        row![
-                            text(player.rom_title.clone()).size(12),
-                            text(format!("({:08x})", player.rom_crc32)).size(11),
-                            rom_status,
-                        ]
-                        .spacing(6),
+                column![
+                    row![
+                        text(format!("P{} {}{marker}", i + 1, player.nick)).size(13).width(Length::Fill),
+                        text(if player.ready { "ready" } else { "not ready" }).size(11),
                     ]
-                    .width(Length::Fill),
-                    text(if player.ready { "ready" } else { "not ready" }).size(13),
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center),
+                    row![text(player.rom_title.clone()).size(11).width(Length::Fill), rom_status].spacing(6),
                 ]
-                .spacing(8)
-                .align_y(iced::Alignment::Center),
+                .spacing(2),
             )
             .padding(6)
             .width(Length::Fill)
@@ -118,57 +100,49 @@ pub fn view<'a>(state: &'a State, library: &'a Library, saves_dir: &std::path::P
     }
     for i in state.players.len()..gbaroll_signaling::MAX_PLAYERS {
         slots = slots.push(
-            container(text(format!("P{} — open", i + 1)).size(13))
+            container(text(format!("P{} — open", i + 1)).size(11))
                 .padding(6)
                 .width(Length::Fill),
         );
     }
 
-    let mut saves: Vec<SaveChoice> = vec![SaveChoice::Fresh];
-    saves.extend(crate::library::list_saves(saves_dir).into_iter().map(SaveChoice::File));
-
-    // The host never readies up (their save rides the Start message);
-    // everyone else commits their save behind the ready flag.
-    let mut ready_row = row![
-        text("my save:"),
-        pick_list(saves, Some(state.save_choice.clone()), Message::LobbySaveSelected),
-    ]
-    .spacing(8)
-    .align_y(iced::Alignment::Center);
-    if state.my_idx != 0 {
-        let mut ready_box = checkbox(state.my_ready);
-        if have_all_roms || state.my_ready {
-            ready_box = ready_box.on_toggle(Message::LobbyReadyToggled);
-        }
-        ready_row = ready_row.push(ready_box).push(text("ready"));
-    }
-
-    let start_row: Element<'_, Message> = if state.my_idx == 0 {
+    // The host never readies up; everyone else flips the flag. The state
+    // that used to ride the ready-up (the save image) now travels
+    // peer-to-peer at start: your machine as it runs IS the commitment.
+    let controls: Element<'_, Message> = if state.my_idx == 0 {
         let all_ready = state.players.len() >= 2 && state.players.iter().skip(1).all(|p| p.ready);
-        let mut btn = button(text("Start session")).padding(8);
+        let mut btn = button(text("Plug in").size(13)).padding(8);
         if all_ready && have_all_roms {
             btn = btn.on_press(Message::LobbyStartClicked);
         }
-        row![
+        column![
             btn,
             text(if all_ready {
                 "".to_string()
             } else {
                 "waiting for everyone to ready up".to_string()
             })
-            .size(12),
+            .size(11),
         ]
-        .spacing(8)
-        .align_y(iced::Alignment::Center)
+        .spacing(4)
         .into()
     } else {
-        text("waiting for the host to start…").size(13).into()
+        let mut ready_box = checkbox(state.my_ready);
+        if have_all_roms || state.my_ready {
+            ready_box = ready_box.on_toggle(Message::LobbyReadyToggled);
+        }
+        column![
+            row![ready_box, text("ready").size(13)].spacing(6).align_y(iced::Alignment::Center),
+            text("the host plugs in once everyone is ready").size(11),
+        ]
+        .spacing(4)
+        .into()
     };
 
     let chat_lines: Vec<Element<'_, Message>> = state
         .chat
         .iter()
-        .map(|(nick, line)| text(format!("{nick}: {line}")).size(13).into())
+        .map(|(nick, line)| text(format!("{nick}: {line}")).size(12).into())
         .collect();
     let chat = column![
         scrollable(column(chat_lines).spacing(2))
@@ -177,29 +151,19 @@ pub fn view<'a>(state: &'a State, library: &'a Library, saves_dir: &std::path::P
         text_input("say something…", &state.chat_input)
             .on_input(Message::LobbyChatChanged)
             .on_submit(Message::LobbyChatSubmitted)
-            .padding(6),
+            .padding(6)
+            .size(13),
     ]
     .spacing(6)
-    .width(Length::FillPortion(2))
     .height(Length::Fill);
 
-    let left = column![
-        header,
-        slots,
-        if !have_all_roms {
-            Element::from(
-                text("You're missing a copy of someone's ROM — add it to your library and rescan to ready up.")
-                    .size(12),
-            )
-        } else {
-            Element::from(iced::widget::Space::new())
-        },
-        ready_row,
-        start_row,
-        text(state.status.clone().unwrap_or_default()).size(12),
-    ]
-    .spacing(10)
-    .width(Length::FillPortion(3));
-
-    row![left, chat].spacing(PADDING * 2.0).height(Length::Fill).into()
+    let mut panel = column![header, slots].spacing(10);
+    if !have_all_roms {
+        panel = panel.push(text("You're missing a copy of someone's ROM — add it to your library first.").size(11));
+    }
+    panel = panel.push(controls);
+    if let Some(status) = &state.status {
+        panel = panel.push(text(status.clone()).size(11));
+    }
+    panel.push(chat).height(Length::Fill).into()
 }

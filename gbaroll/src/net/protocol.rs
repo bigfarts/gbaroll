@@ -1,8 +1,8 @@
 //! The peer-to-peer wire protocol. Each mesh edge carries two channels:
 //!
-//! * `gbaroll-ctl` (stream 0, reliable/ordered) — tiny bincode
-//!   [`PeerControl`] messages: the version handshake and the deliberate
-//!   quit.
+//! * `gbaroll-ctl` (stream 0, reliable/ordered) — bincode [`PeerControl`]
+//!   messages: the version handshake, the boot-payload exchange that
+//!   plugs the cable in, and the deliberate quit.
 //! * `gbaroll-data` (stream 1, unreliable/unordered) — [`rennet`]
 //!   frames of [`Input`] elements (one per local tick, seq = tick) with
 //!   a per-frame [`Meta`] carrying clock sync + the newest settled-state
@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Bumped on any incompatible change to the peer protocol.
-pub const NET_VERSION: u32 = 1;
+pub const NET_VERSION: u32 = 2;
 
 /// Rollback horizon: how far ahead of a missing input the streams will
 /// buffer before declaring the peer unrecoverable (~10s at 60fps).
@@ -91,6 +91,44 @@ pub type InStream = rennet::InStream<Proto>;
 pub enum PeerControl {
     Hello { net_version: u32 },
     Quit,
+    /// Announces this side's encoded [`BootBlob`]; exactly `len` bytes of
+    /// [`BootChunk`](PeerControl::BootChunk)s follow on the same (ordered)
+    /// channel.
+    Boot { len: u32 },
+    BootChunk(Vec<u8>),
+}
+
+/// One side's boot payload: everything a peer needs to reconstruct that
+/// side's live machine when the cable plugs in. Travels peer-to-peer as
+/// [`PeerControl::Boot`]+chunks, and rides in replays so playback can
+/// boot the same link.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BootBlob {
+    /// Serialized core state ([`mgba_siolink::Link::capture_boot_state`]).
+    pub state: Vec<u8>,
+    /// SRAM/flash image at capture time (core states don't carry
+    /// savedata).
+    pub save: Option<Vec<u8>>,
+}
+
+/// Chunk size for the boot exchange, comfortably under the negotiated
+/// datachannel message cap (256 KiB).
+pub const BOOT_CHUNK: usize = 64 * 1024;
+
+/// Sanity cap on an encoded boot payload (a core state is ~400 KiB and
+/// saves top out at 128 KiB, both before compression).
+pub const MAX_BOOT_SIZE: usize = 4 * 1024 * 1024;
+
+impl BootBlob {
+    /// bincode + zstd; GBA RAM images compress hard, and these cross the
+    /// wire once per peer at plug-in time.
+    pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
+        Ok(zstd::encode_all(&bincode::serialize(self)?[..], 0)?)
+    }
+
+    pub fn decode(bytes: &[u8]) -> anyhow::Result<BootBlob> {
+        Ok(bincode::deserialize(&zstd::decode_all(bytes)?)?)
+    }
 }
 
 /// Opaque signal relayed through the signaling server while building
@@ -120,6 +158,17 @@ mod tests {
             meta.encode(&mut bytes).unwrap();
             assert_eq!(Meta::decode(&mut &bytes[..]).unwrap(), Some(meta));
         }
+    }
+
+    #[test]
+    fn boot_blob_roundtrips_and_compresses() {
+        let blob = BootBlob {
+            state: vec![0u8; 400 * 1024],
+            save: Some(vec![0xffu8; 32 * 1024]),
+        };
+        let encoded = blob.encode().unwrap();
+        assert!(encoded.len() < blob.state.len() / 4);
+        assert_eq!(BootBlob::decode(&encoded).unwrap(), blob);
     }
 
     #[test]

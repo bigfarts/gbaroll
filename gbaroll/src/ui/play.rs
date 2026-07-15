@@ -1,5 +1,6 @@
-//! The Play tab: ROM library on the left, session launchers (host /
-//! join / local) on the right.
+//! The Play tab: ROM library on the left, the session launcher on the
+//! right. Netplay isn't launched from here — you launch the game, then
+//! plug the cable in from the session's link sidebar.
 
 use iced::widget::{button, column, container, pick_list, row, scrollable, text, text_input};
 use iced::{Element, Length, Theme};
@@ -9,7 +10,6 @@ use super::{App, Message, SaveChoice, PADDING};
 pub struct State {
     pub search: String,
     pub selected_crc: Option<u32>,
-    pub join_code: String,
     pub local_players: usize,
     pub local_save: SaveChoice,
 }
@@ -19,8 +19,7 @@ impl Default for State {
         State {
             search: String::new(),
             selected_crc: None,
-            join_code: String::new(),
-            local_players: 2,
+            local_players: 1,
             local_save: SaveChoice::Fresh,
         }
     }
@@ -93,37 +92,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     saves.extend(crate::library::list_saves(&app.config.saves_dir).into_iter().map(SaveChoice::File));
 
     let launcher: Element<'_, Message> = if let Some(rom) = selected {
-        let host_btn = button(text("Host a room")).padding(8).on_press(Message::HostClicked);
-        let join_row = row![
-            text_input("room code", &state.join_code)
-                .on_input(Message::JoinCodeChanged)
-                .on_submit(Message::JoinClicked)
-                .padding(6)
-                .width(Length::Fixed(120.0)),
-            button(text("Join")).padding(8).on_press(Message::JoinClicked),
-        ]
-        .spacing(6)
-        .align_y(iced::Alignment::Center);
-
-        let players: Vec<usize> = vec![2, 3, 4];
-        let local = column![
-            text("Local session").size(16),
-            row![
-                text("players:"),
-                pick_list(players, Some(state.local_players), Message::LocalPlayersChanged),
-            ]
-            .spacing(6)
-            .align_y(iced::Alignment::Center),
-            row![
-                text("save (all sides):"),
-                pick_list(saves.clone(), Some(state.local_save.clone()), Message::LocalSaveSelected),
-            ]
-            .spacing(6)
-            .align_y(iced::Alignment::Center),
-            button(text("Start local session")).padding(8).on_press(Message::LocalClicked),
-        ]
-        .spacing(8);
-
+        let players: Vec<usize> = vec![1, 2, 3, 4];
         column![
             text(rom.display_name().to_string()).size(20),
             text(format!("{} · {} · crc32 {:08x}", rom.title, rom.code, rom.crc32)).size(13),
@@ -133,17 +102,28 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 .spacing(6)
                 .align_y(iced::Alignment::Center),
             iced::widget::Space::new().height(Length::Fixed(8.0)),
-            text("Netplay").size(16),
-            text("Each player brings their own ROM — everyone just needs a local copy of everyone else's.").size(12),
-            host_btn,
-            join_row,
-            iced::widget::Space::new().height(Length::Fixed(12.0)),
-            local,
+            row![
+                text("players:"),
+                pick_list(players, Some(state.local_players), Message::LocalPlayersChanged),
+                text("(2+ = a whole link on this machine)").size(11),
+            ]
+            .spacing(6)
+            .align_y(iced::Alignment::Center),
+            row![
+                text("save:"),
+                pick_list(saves.clone(), Some(state.local_save.clone()), Message::LocalSaveSelected),
+            ]
+            .spacing(6)
+            .align_y(iced::Alignment::Center),
+            button(text("Play")).padding(8).on_press(Message::LocalClicked),
+            iced::widget::Space::new().height(Length::Fixed(8.0)),
+            text("Netplay plugs in mid-game: launch your game, then host or join a room from the Link sidebar.")
+                .size(12),
         ]
         .spacing(6)
         .into()
     } else {
-        column![text("Pick a ROM from the library to host, join, or play locally.").size(14)].into()
+        column![text("Pick a ROM from the library to play.").size(14)].into()
     };
 
     row![

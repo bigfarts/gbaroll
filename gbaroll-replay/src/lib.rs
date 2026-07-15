@@ -57,9 +57,13 @@ pub struct PlayerMeta {
     pub rom_title: String,
     /// That ROM's header game code (up to 4 bytes of ASCII).
     pub rom_code: String,
-    /// Save image the player's side booted with, if any. Embedding it
+    /// Opaque boot capture the player's side loaded before the first tick
+    /// (sessions start mid-game: a plugged-in cable rather than a power-on
+    /// boot). The bytes are whatever the recorder handed in — gbaroll
+    /// stores its compressed exchange blob, save image included — and
+    /// playback must hand them back to the same boot path. Embedding them
     /// keeps the replay self-sufficient given the ROMs.
-    pub save: Option<Vec<u8>>,
+    pub boot: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +89,17 @@ impl Default for Metadata {
             rtc_unix_micros: None,
             players: vec![PlayerMeta::default(), PlayerMeta::default()],
         }
+    }
+}
+
+/// A length-prefixed optional byte blob: `u32::MAX` = `None`.
+fn write_blob<W: std::io::Write>(w: &mut W, blob: Option<&[u8]>) -> std::io::Result<()> {
+    match blob {
+        Some(blob) => {
+            w.write_all(&(blob.len() as u32).to_le_bytes())?;
+            w.write_all(blob)
+        }
+        None => w.write_all(&u32::MAX.to_le_bytes()),
     }
 }
 
@@ -135,13 +150,7 @@ impl<W: std::io::Write> Writer<W> {
             w.write_all(&player.rom_crc32.to_le_bytes())?;
             write_ascii_padded(&mut w, &player.rom_title, 12)?;
             write_ascii_padded(&mut w, &player.rom_code, 4)?;
-            match &player.save {
-                Some(save) => {
-                    w.write_all(&(save.len() as u32).to_le_bytes())?;
-                    w.write_all(save)?;
-                }
-                None => w.write_all(&u32::MAX.to_le_bytes())?,
-            }
+            write_blob(&mut w, player.boot.as_deref())?;
         }
         Ok(Writer {
             w,
@@ -288,18 +297,13 @@ fn parse_header(data: &[u8]) -> Result<(Metadata, Cursor<'_>), Error> {
         let rom_crc32 = u32::from_le_bytes(r.take(4)?.try_into().unwrap());
         let rom_title = read_ascii_padded(r.take(12)?);
         let rom_code = read_ascii_padded(r.take(4)?);
-        let save_len = u32::from_le_bytes(r.take(4)?.try_into().unwrap());
-        let save = if save_len != u32::MAX {
-            Some(r.take(save_len as usize)?.to_vec())
-        } else {
-            None
-        };
+        let boot = read_blob(&mut r)?;
         players.push(PlayerMeta {
             nick,
             rom_crc32,
             rom_title,
             rom_code,
-            save,
+            boot,
         });
     }
     Ok((
@@ -311,6 +315,14 @@ fn parse_header(data: &[u8]) -> Result<(Metadata, Cursor<'_>), Error> {
         },
         r,
     ))
+}
+
+fn read_blob(r: &mut Cursor<'_>) -> Result<Option<Vec<u8>>, Error> {
+    let len = u32::from_le_bytes(r.take(4)?.try_into().unwrap());
+    if len == u32::MAX {
+        return Ok(None);
+    }
+    Ok(Some(r.take(len as usize)?.to_vec()))
 }
 
 struct Cursor<'a> {
@@ -348,7 +360,7 @@ mod tests {
                     rom_crc32: 0xdead_beef + i as u32,
                     rom_title: format!("TESTGAME{i}"),
                     rom_code: "ATST".to_string(),
-                    save: (i == 0).then(|| vec![1, 2, 3]),
+                    boot: (i == 1).then(|| vec![9; 64]),
                 })
                 .collect(),
         }

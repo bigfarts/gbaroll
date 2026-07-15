@@ -1,8 +1,9 @@
 //! The netplay session: a rollback `mgba_siolink::session::Session`
 //! paced on a dedicated drive thread, with per-peer rennet streams over
 //! the mesh's unreliable datachannels. The drive loop mirrors tango's:
-//! drain the network, stall-guard, read skew *before* advance, advance,
-//! broadcast the redundancy window, feed the throttler into the pacer.
+//! drain the network, queue watchdog, read skew *before* advance,
+//! advance, broadcast the redundancy window, feed the throttler into
+//! the pacer.
 
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
@@ -11,13 +12,13 @@ use std::time::Instant;
 
 use mgba_siolink::session::Session;
 use mgba_siolink::throttler::Throttler;
-use mgba_siolink::{Link, LinkOptions, SideOptions};
+use mgba_siolink::{BootSide, Link};
 
 use crate::net::lobby::SessionBundle;
-use crate::net::protocol::{Frame, InStream, Input, Meta, OutStream, PeerControl, HORIZON};
+use crate::net::protocol::{BootBlob, Frame, InStream, Input, Meta, OutStream, PeerControl, HORIZON};
 use crate::session::{
-    prepare_audio_buffers, LinkAccess, Pacer, SessionDescriptor, SessionEnd, SessionKind, SessionRuntime,
-    SharedSession, EXPECTED_FPS, PAUSED_TICK, STALL_QUEUE_LENGTH,
+    prepare_audio_buffers, Handoff, LinkAccess, Pacer, SessionDescriptor, SessionEnd, SessionKind, SessionRuntime,
+    SharedSession, EXPECTED_FPS, UNPLUG_QUEUE_LENGTH,
 };
 
 pub struct NetplayArgs {
@@ -33,7 +34,7 @@ pub struct NetplayArgs {
 
 /// Cadence of the per-peer heartbeat: resend the redundancy window on
 /// any interval where the emulator sent nothing, so acks/recovery keep
-/// flowing while stalled.
+/// flowing while a peer catches up.
 const HEARTBEAT: std::time::Duration = std::time::Duration::from_millis(16);
 
 /// How many (seq, send time) samples to keep for ack-derived RTT.
@@ -135,6 +136,7 @@ pub fn start(
         nicks: bundle.players.iter().map(|p| p.nick.clone()).collect(),
         room_code: Some(bundle.room_code.clone()),
         replay_path: None,
+        rom_crc32: Some(bundle.players[local_player].rom_crc32),
     };
 
     // The link boots on the drive thread (tango does the same); it hands
@@ -142,7 +144,7 @@ pub fn start(
     let (handle_tx, handle_rx) = std::sync::mpsc::channel();
     let drive = {
         let shared = shared.clone();
-        let saves: Vec<Option<Vec<u8>>> = bundle.players.iter().map(|p| p.save.clone()).collect();
+        let boots = bundle.boots;
         let nicks: Vec<String> = bundle.players.iter().map(|p| p.nick.clone()).collect();
         let room_code = bundle.room_code.clone();
         let clock = bundle.clock_unix_micros;
@@ -156,7 +158,7 @@ pub fn start(
                     shared,
                     local_player,
                     roms,
-                    saves,
+                    boots,
                     nicks,
                     rom_meta,
                     clock,
@@ -187,6 +189,7 @@ pub fn start(
     Ok(SessionRuntime {
         shared,
         descriptor,
+        link: None,
         playback: None,
         _audio: audio,
         pre_join: None,
@@ -315,7 +318,7 @@ fn drive(
     shared: Arc<SharedSession>,
     local_player: usize,
     roms: Vec<Vec<u8>>,
-    saves: Vec<Option<Vec<u8>>>,
+    boots: Vec<Vec<u8>>,
     nicks: Vec<String>,
     rom_meta: Vec<(u32, String, String)>,
     clock_unix_micros: u64,
@@ -328,14 +331,27 @@ fn drive(
     handle_tx: std::sync::mpsc::Sender<mgba_siolink::session::LinkHandle>,
 ) {
     let rtc = std::time::UNIX_EPOCH + std::time::Duration::from_micros(clock_unix_micros);
-    let mut link = match Link::with_options(LinkOptions {
-        sides: roms
+    let local_rom = roms[local_player].clone();
+    // The cable plugs in: every peer rebuilds the identical link from the
+    // exchanged captures (the local side included — our own machine loads
+    // from its serialized capture too, so everyone reconstructs the same
+    // bytes).
+    let link = (|| {
+        let sides = roms
             .into_iter()
-            .zip(saves.iter().cloned())
-            .map(|(rom, save)| SideOptions { rom, save })
-            .collect(),
-        rtc: Some(rtc),
-    }) {
+            .zip(boots.iter())
+            .map(|(rom, boot)| {
+                let blob = BootBlob::decode(boot)?;
+                anyhow::Ok(BootSide {
+                    rom,
+                    save: blob.save,
+                    state: blob.state,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        anyhow::Ok(Link::from_states(sides, Some(rtc))?)
+    })();
+    let mut link = match link {
         Ok(link) => link,
         Err(e) => {
             shared.finish(SessionEnd::Error(format!("failed to boot link: {e}")));
@@ -362,17 +378,23 @@ fn drive(
         clock_unix_micros,
         &nicks,
         &rom_meta,
-        &saves,
+        &boots,
     )
     .map_err(|e| log::error!("replay recording disabled: {e:#}"))
     .ok();
 
     let mut throttler = Throttler::new();
     let mut pacer = Pacer::new();
+    // Per peer, when we last heard an input from them — consulted only
+    // when the queue watchdog trips, to name the peer that went silent.
+    let mut last_heard: Vec<Instant> = peers.iter().map(|_| Instant::now()).collect();
 
     let end = 'main: loop {
         if shared.quit.load(Ordering::Relaxed) {
             break 'main SessionEnd::LocalQuit;
+        }
+        if shared.unplug.load(Ordering::Relaxed) {
+            break 'main SessionEnd::Unplugged;
         }
 
         let pd = shared.present_delay.load(Ordering::Relaxed);
@@ -387,7 +409,12 @@ fn drive(
                     player,
                     keys,
                     tick_advantage,
-                } => session.add_remote_input(player, keys as u32, tick_advantage),
+                } => {
+                    if let Some(slot) = peers.iter().position(|p| p.player == player) {
+                        last_heard[slot] = Instant::now();
+                    }
+                    session.add_remote_input(player, keys as u32, tick_advantage)
+                }
                 NetEvent::Gone { player, reason } => {
                     break 'main match reason {
                         GoneReason::Quit => SessionEnd::PeerQuit { player },
@@ -399,13 +426,20 @@ fn drive(
             }
         }
 
-        // Stall guard: don't run further ahead than the horizon can
-        // recover; the heartbeat keeps redundancy flowing meanwhile.
+        // The queue watchdog (tango's scheme): a dead link can't stop the
+        // throttled sim from committing local inputs, so the unmatched
+        // queue climbs steadily toward the trip depth — reaching it IS
+        // the disconnect signal, measured in the resource that would
+        // overflow the horizon rather than a time proxy for it. The
+        // transport's own close events usually beat this; the watchdog
+        // catches the hard drops the transport is slow to notice. Blame
+        // whoever has been silent longest.
         let queue_len = session.local_queue_length();
-        if queue_len >= STALL_QUEUE_LENGTH {
-            std::thread::sleep(PAUSED_TICK);
-            pacer.reset();
-            continue;
+        if queue_len >= UNPLUG_QUEUE_LENGTH {
+            let slot = (0..peers.len()).max_by_key(|&i| last_heard[i].elapsed()).unwrap_or(0);
+            break 'main SessionEnd::PeerDisconnected {
+                player: peers[slot].player,
+            };
         }
 
         // Read skew BEFORE advance enqueues this tick's local input.
@@ -499,9 +533,9 @@ fn drive(
         pacer.pace(fps_target);
     };
 
-    // A deliberate local quit announces itself so peers end at once
-    // instead of waiting out a transport EOF.
-    if matches!(end, SessionEnd::LocalQuit) {
+    // A deliberate local quit or unplug announces itself so peers end at
+    // once instead of waiting out a transport EOF.
+    if matches!(end, SessionEnd::LocalQuit | SessionEnd::Unplugged) {
         if let Ok(quit) = bincode::serialize(&PeerControl::Quit) {
             for ctl in ctl_txs.iter_mut() {
                 let _ = crate::runtime().block_on(async {
@@ -517,6 +551,29 @@ fn drive(
         }
     }
 
+    // The cable unplugs: capture the local machine as it stands (the
+    // newest simulated tick — what the player was just looking at) so the
+    // game continues solo. The dead peers' unconfirmed inputs stay
+    // whatever we predicted, which is exactly the static a real yank
+    // leaves on the wire.
+    if end.unplugs() {
+        let captured = session.with_link(|link| {
+            let state = link.capture_boot_state(local_player)?;
+            Ok::<_, mgba::Error>((state, link.export_save(local_player)))
+        });
+        match captured {
+            Ok((state, save)) => {
+                *shared.handoff.lock().unwrap() = Some(Handoff {
+                    rom: local_rom,
+                    state,
+                    save,
+                    rtc_unix_micros: clock_unix_micros,
+                });
+            }
+            Err(e) => log::error!("couldn't capture the unplug handoff: {e}"),
+        }
+    }
+
     shared.finish(end);
     drop(connections);
 }
@@ -528,7 +585,7 @@ fn open_replay(
     clock_unix_micros: u64,
     nicks: &[String],
     rom_meta: &[(u32, String, String)],
-    saves: &[Option<Vec<u8>>],
+    boots: &[Vec<u8>],
 ) -> anyhow::Result<gbaroll_replay::Writer<std::io::BufWriter<std::fs::File>>> {
     std::fs::create_dir_all(replays_dir)?;
     let stamp = chrono::Local::now().format("%Y%m%d%H%M%S");
@@ -546,13 +603,15 @@ fn open_replay(
         players: nicks
             .iter()
             .zip(rom_meta.iter())
-            .zip(saves.iter())
-            .map(|((nick, (crc, title, code)), save)| gbaroll_replay::PlayerMeta {
+            .zip(boots.iter())
+            .map(|((nick, (crc, title, code)), boot)| gbaroll_replay::PlayerMeta {
                 nick: nick.clone(),
                 rom_crc32: *crc,
                 rom_title: title.clone(),
                 rom_code: code.clone(),
-                save: save.clone(),
+                // The exchanged payload verbatim (already compressed):
+                // playback rebuilds the same plugged-in link from it.
+                boot: Some(boot.clone()),
             })
             .collect(),
     };

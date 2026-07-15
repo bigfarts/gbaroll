@@ -1,42 +1,74 @@
-//! A local link session: 2–4 cores on one machine, no rollback engine —
+//! A local link session: 1–4 cores on one machine, no rollback engine —
 //! the joypad drives whichever player is currently controlled and the
-//! rest idle. Useful for poking at a game's link mode (and for testing
-//! the whole client without a peer).
+//! rest idle. One core is the solo mode netplay plugs into and unplugs
+//! from; 2–4 are a whole link on one machine, useful for poking at a
+//! game's link mode (and for testing the whole client without a peer).
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use mgba_siolink::{Link, LinkOptions, SideOptions};
+use mgba_siolink::{BootSide, Link, LinkOptions, SideOptions};
 
 use crate::session::{
-    apply_view_frameskip, prepare_audio_buffers, LinkAccess, Pacer, SessionDescriptor, SessionEnd, SessionKind,
-    SessionRuntime, SharedSession, EXPECTED_FPS, PAUSED_TICK,
+    apply_view_frameskip, prepare_audio_buffers, Handoff, LinkAccess, Pacer, SessionDescriptor, SessionEnd,
+    SessionKind, SessionRuntime, SharedSession, EXPECTED_FPS, PAUSED_TICK,
 };
 
 pub struct LocalArgs {
     /// Per player, the ROM their side boots.
     pub roms: Vec<Vec<u8>>,
+    /// CRC32 of the controlled player's ROM (for the session descriptor).
+    pub rom_crc32: u32,
     /// Save applied to every side (each GBA has its own identical cart).
     pub save: Option<Vec<u8>>,
 }
 
+/// Boot a fresh local session from power-on.
 pub fn start(
     args: LocalArgs,
     audio_binder: &crate::platform::audio::LateBinder,
     frame_notify: Arc<tokio::sync::Notify>,
 ) -> anyhow::Result<SessionRuntime> {
-    let num_players = args.roms.len();
-    let mut link = Link::with_options(LinkOptions {
+    let link = Link::with_options(LinkOptions {
         sides: args
             .roms
-            .into_iter()
+            .iter()
             .map(|rom| SideOptions {
-                rom,
+                rom: rom.clone(),
                 save: args.save.clone(),
             })
             .collect(),
         rtc: Some(std::time::SystemTime::now()),
     })?;
+    run(link, args.rom_crc32, audio_binder, frame_notify)
+}
+
+/// Continue a solo machine from a netplay teardown: the cable was
+/// unplugged, the game keeps running from exactly where the link left it.
+pub fn resume(
+    handoff: Handoff,
+    rom_crc32: u32,
+    audio_binder: &crate::platform::audio::LateBinder,
+    frame_notify: Arc<tokio::sync::Notify>,
+) -> anyhow::Result<SessionRuntime> {
+    let link = Link::from_states(
+        vec![BootSide {
+            rom: handoff.rom,
+            save: handoff.save,
+            state: handoff.state,
+        }],
+        Some(std::time::UNIX_EPOCH + std::time::Duration::from_micros(handoff.rtc_unix_micros)),
+    )?;
+    run(link, rom_crc32, audio_binder, frame_notify)
+}
+
+fn run(
+    mut link: Link,
+    rom_crc32: u32,
+    audio_binder: &crate::platform::audio::LateBinder,
+    frame_notify: Arc<tokio::sync::Notify>,
+) -> anyhow::Result<SessionRuntime> {
+    let num_players = link.num_players();
     prepare_audio_buffers(&mut link);
     apply_view_frameskip(&mut link, 0);
     let link = Arc::new(Mutex::new(link));
@@ -49,6 +81,7 @@ pub fn start(
         nicks: (0..num_players).map(|i| format!("Player {}", i + 1)).collect(),
         room_code: None,
         replay_path: None,
+        rom_crc32: Some(rom_crc32),
     };
 
     let audio = audio_binder
@@ -61,6 +94,7 @@ pub fn start(
 
     let drive = {
         let shared = shared.clone();
+        let link = link.clone();
         std::thread::Builder::new()
             .name("gbaroll-local-drive".to_owned())
             .spawn(move || drive(shared, link, num_players))?
@@ -69,6 +103,7 @@ pub fn start(
     Ok(SessionRuntime {
         shared,
         descriptor,
+        link: Some(LinkAccess::Shared(link)),
         playback: None,
         _audio: audio,
         pre_join: None,
@@ -104,6 +139,9 @@ fn drive(shared: Arc<SharedSession>, link: Arc<Mutex<Link>>, num_players: usize)
                 last_view = view;
             }
             link.tick(&keys);
+            if num_players == 1 {
+                shared.link_wanted.store(link.sio_comms_active(0), Ordering::Relaxed);
+            }
             if let Some(buf) = link.video_buffer(view) {
                 shared.publish_video(buf);
             }

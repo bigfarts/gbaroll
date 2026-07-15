@@ -12,11 +12,13 @@ use crate::net::mesh::{self, PeerLink};
 
 #[derive(Debug)]
 pub enum LobbyCommand {
-    SetReady { ready: bool, save: Option<Vec<u8>> },
+    SetReady { ready: bool },
     Chat(String),
-    /// Host only; carries the host's own save (the host never readies
-    /// up).
-    Start { save: Option<Vec<u8>> },
+    /// Host only.
+    Start,
+    /// The local machine's encoded boot payload, captured by the UI in
+    /// response to [`LobbyEvent::Starting`].
+    Boot(Vec<u8>),
     Leave,
 }
 
@@ -29,6 +31,9 @@ pub enum LobbyEvent {
     Error(String),
     /// The lobby is dead; the UI should drop it.
     Fatal(String),
+    /// The room is starting: capture the local machine and send it back
+    /// as [`LobbyCommand::Boot`] — the cable is being plugged in.
+    Starting,
     /// Mesh progress line for the connecting overlay.
     Connecting(String),
     /// Everything is up: hand off to the session.
@@ -42,6 +47,9 @@ pub struct SessionBundle {
     pub players: Vec<StartPlayer>,
     pub local_player: usize,
     pub peers: Vec<PeerLink>,
+    /// Every side's encoded boot payload, in player order (exchanged over
+    /// the mesh; the local slot is our own capture).
+    pub boots: Vec<Vec<u8>>,
 }
 
 pub enum LobbyMode {
@@ -124,15 +132,18 @@ async fn run(
         tokio::select! {
             cmd = cmd_rx.recv() => {
                 match cmd {
-                    Some(LobbyCommand::SetReady { ready, save }) => {
-                        send(&mut sink, &ClientMessage::SetReady { ready, save }).await?;
+                    Some(LobbyCommand::SetReady { ready }) => {
+                        send(&mut sink, &ClientMessage::SetReady { ready }).await?;
                     }
                     Some(LobbyCommand::Chat(text)) => {
                         send(&mut sink, &ClientMessage::Chat { text }).await?;
                     }
-                    Some(LobbyCommand::Start { save }) => {
-                        send(&mut sink, &ClientMessage::Start { save }).await?;
+                    Some(LobbyCommand::Start) => {
+                        send(&mut sink, &ClientMessage::Start).await?;
                     }
+                    // A boot capture belongs to the start phase; stray
+                    // ones in the lobby phase mean nothing.
+                    Some(LobbyCommand::Boot(_)) => {}
                     Some(LobbyCommand::Leave) | None => {
                         let _ = send(&mut sink, &ClientMessage::Leave).await;
                         let _ = sink.send(Message::Close(None)).await;
@@ -187,13 +198,31 @@ async fn run(
         }
     };
 
-    // Mesh phase: the websocket becomes the signal relay.
+    // Mesh phase: the websocket becomes the signal relay. The UI captures
+    // the local machine as soon as it sees Starting, so the boot payload
+    // rides the command queue while the mesh comes up.
     let (clock_unix_micros, players, local_player) = starting;
+    let _ = events.send(LobbyEvent::Starting);
     let _ = events.send(LobbyEvent::Connecting(format!(
         "connecting to {} peer(s)…",
         players.len() - 1
     )));
-    let peers = mesh::build(&mut sink, &mut stream, local_player, players.len(), &ice_servers).await?;
+    let mut peers = mesh::build(&mut sink, &mut stream, local_player, players.len(), &ice_servers).await?;
+
+    let blob = loop {
+        match cmd_rx.recv().await {
+            Some(LobbyCommand::Boot(blob)) => break blob,
+            Some(LobbyCommand::Leave) | None => {
+                let _ = sink.send(Message::Close(None)).await;
+                return Ok(());
+            }
+            Some(_) => {}
+        }
+    };
+
+    // The plug-in exchange: every side's capture crosses the mesh.
+    let _ = events.send(LobbyEvent::Connecting("exchanging machine state…".to_string()));
+    let boots = mesh::exchange_boots(&mut peers, local_player, players.len(), blob).await?;
 
     let _ = events.send(LobbyEvent::SessionReady(Box::new(SessionBundle {
         room_code,
@@ -201,6 +230,7 @@ async fn run(
         players,
         local_player,
         peers,
+        boots,
     })));
 
     // The room is done with the server; close politely.

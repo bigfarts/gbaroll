@@ -1,16 +1,20 @@
 //! End-to-end netplay smoke test: an in-process signaling server, two
 //! lobby clients rendezvousing over real websockets, a real WebRTC mesh
-//! over loopback, and two live rollback sessions running the built-in
-//! SIO test ROM against each other — asserting input confirmation
-//! progress, no desync, a clean peer-quit, and parseable replays.
+//! over loopback, two solo machines captured mid-run and exchanged over
+//! the mesh (the cable plug-in), two live rollback sessions running the
+//! built-in SIO test ROM against each other — asserting input
+//! confirmation progress, no desync across the plugged-in link, a clean
+//! unplug that hands both sides a solo continuation, and parseable
+//! replays carrying the boot captures.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::net::lobby::{self, LobbyArgs, LobbyCommand, LobbyEvent, LobbyMode, SessionBundle};
+use crate::net::protocol::BootBlob;
 use crate::session::netplay::{self, NetplayArgs};
-use crate::session::SessionEnd;
+use crate::session::{local, SessionEnd};
 
 fn wait_event<T>(
     handle: &lobby::LobbyHandle,
@@ -44,6 +48,36 @@ fn wait_event<T>(
     }
 }
 
+/// Run a solo machine briefly, then freeze it and capture its encoded
+/// boot payload — the client-side half of the plug-in handshake.
+fn solo_and_capture(rom: &[u8], crc: u32, run_for: Duration) -> (crate::session::SessionRuntime, Vec<u8>) {
+    let binder = crate::platform::audio::LateBinder::new();
+    let session = local::start(
+        local::LocalArgs {
+            roms: vec![rom.to_vec()],
+            rom_crc32: crc,
+            save: None,
+        },
+        &binder,
+        Arc::new(tokio::sync::Notify::new()),
+    )
+    .expect("solo boot");
+    std::thread::sleep(run_for);
+    session.shared.paused.store(true, Ordering::Relaxed);
+    let blob = session
+        .link
+        .as_ref()
+        .expect("solo sessions expose their link")
+        .with_link(|link| BootBlob {
+            state: link.capture_boot_state(0).unwrap(),
+            save: link.export_save(0),
+        })
+        .unwrap()
+        .encode()
+        .unwrap();
+    (session, blob)
+}
+
 #[test]
 fn two_player_netplay_smoke() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).try_init();
@@ -63,6 +97,13 @@ fn two_player_netplay_smoke() {
     let rom = mgba_siolink::testrom::build();
     let crc = crc32fast::hash(&rom);
     let replays_dir = tempfile::tempdir().unwrap();
+
+    // Two solo machines already running, deliberately for different
+    // lengths — the cable plugs into whatever state each is in.
+    let (host_solo, host_blob) = solo_and_capture(&rom, crc, Duration::from_millis(400));
+    let (guest_solo, guest_blob) = solo_and_capture(&rom, crc, Duration::from_millis(150));
+    drop(host_solo);
+    drop(guest_solo);
 
     let lobby_args = |mode| LobbyArgs {
         server_url: server_url.clone(),
@@ -85,32 +126,42 @@ fn two_player_netplay_smoke() {
     });
     // The host never readies up — only the guest does; the host's seat
     // must still read ready in the roster.
-    guest.send(LobbyCommand::SetReady { ready: true, save: None });
+    guest.send(LobbyCommand::SetReady { ready: true });
     wait_event(&host, "everyone ready", Duration::from_secs(10), |e| match e {
         LobbyEvent::Roster { players, .. } if players.len() == 2 && players.iter().all(|p| p.ready) => Some(()),
         _ => None,
     });
-    host.send(LobbyCommand::Start { save: None });
+    host.send(LobbyCommand::Start);
 
-    // Mesh comes up (real datachannels over loopback). The bundle has
-    // to move out of the event, so this doesn't go through wait_event's
-    // borrowing matcher.
-    let grab = |h: &lobby::LobbyHandle| -> Box<SessionBundle> {
+    // Mesh + boot exchange (real datachannels over loopback): answer each
+    // side's Starting with its prepared capture, then take the bundles.
+    // Both lobbies MUST be pumped concurrently — each side's exchange
+    // completes only once the other has answered Starting.
+    let mut bundles: [Option<Box<SessionBundle>>; 2] = [None, None];
+    {
+        let sides = [(&host, &host_blob), (&guest, &guest_blob)];
         let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
-            match h.events.recv_timeout(Duration::from_millis(100)) {
-                Ok(LobbyEvent::SessionReady(bundle)) => return bundle,
-                Ok(LobbyEvent::Fatal(e)) => panic!("lobby died before session: {e}"),
-                Ok(_) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    assert!(Instant::now() < deadline, "timed out waiting for mesh");
+        while bundles.iter().any(|b| b.is_none()) {
+            assert!(Instant::now() < deadline, "timed out waiting for mesh + exchange");
+            for (i, (handle, blob)) in sides.iter().enumerate() {
+                while let Ok(event) = handle.events.try_recv() {
+                    match event {
+                        LobbyEvent::Starting => handle.send(LobbyCommand::Boot((*blob).clone())),
+                        LobbyEvent::SessionReady(bundle) => bundles[i] = Some(bundle),
+                        LobbyEvent::Fatal(e) => panic!("lobby {i} died before session: {e}"),
+                        _ => {}
+                    }
                 }
-                Err(e) => panic!("lobby task died: {e}"),
             }
+            std::thread::sleep(Duration::from_millis(20));
         }
-    };
-    let host_bundle = grab(&host);
-    let guest_bundle = grab(&guest);
+    }
+    let host_bundle = bundles[0].take().unwrap();
+    let guest_bundle = bundles[1].take().unwrap();
+
+    // Every peer must hold the identical payload set after the exchange.
+    assert_eq!(host_bundle.boots, guest_bundle.boots, "exchanged payloads differ");
+    assert_eq!(host_bundle.boots, vec![host_blob.clone(), guest_blob.clone()]);
 
     // Boot both sessions. No audio backend in tests; each session gets
     // its own silent binder.
@@ -134,7 +185,9 @@ fn two_player_netplay_smoke() {
 
     // Run for a few seconds with wiggling inputs (so repeat-last
     // predictions miss and rollbacks actually happen), watching for
-    // desync/disconnect ends.
+    // desync/disconnect ends. The cross-peer checkpoint digests are
+    // live during this — surviving it means both peers rebuilt the
+    // identical machine from the exchanged captures.
     for i in 0..40u32 {
         host_session.shared.joyflags.store(if i % 4 < 2 { 0x001 } else { 0x002 }, Ordering::Relaxed);
         guest_session
@@ -156,17 +209,23 @@ fn two_player_netplay_smoke() {
         "sessions barely progressed: host {host_confirmed}, guest {guest_confirmed}"
     );
 
-    // Host quits deliberately; the guest should see a peer-quit (the
-    // control-plane Quit beats the transport EOF).
-    drop(host_session);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let guest_end = loop {
-        if let Some(end) = guest_session.shared.end.lock().unwrap().clone() {
-            break end;
+    // Host pulls the cable; the guest should see a peer-quit (the
+    // control-plane Quit beats the transport EOF), and BOTH sides get a
+    // solo continuation handoff.
+    host_session.shared.unplug.store(true, Ordering::Relaxed);
+    let wait_end = |who: &str, session: &crate::session::SessionRuntime| -> SessionEnd {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(end) = session.shared.end.lock().unwrap().clone() {
+                break end;
+            }
+            assert!(Instant::now() < deadline, "{who} never ended");
+            std::thread::sleep(Duration::from_millis(50));
         }
-        assert!(Instant::now() < deadline, "guest never noticed the host leaving");
-        std::thread::sleep(Duration::from_millis(50));
     };
+    let host_end = wait_end("host", &host_session);
+    assert!(matches!(host_end, SessionEnd::Unplugged), "unexpected host end: {host_end:?}");
+    let guest_end = wait_end("guest", &guest_session);
     assert!(
         matches!(
             guest_end,
@@ -174,9 +233,38 @@ fn two_player_netplay_smoke() {
         ),
         "unexpected guest end: {guest_end:?}"
     );
+
+    let host_handoff = host_session.shared.handoff.lock().unwrap().take();
+    assert!(host_handoff.is_some(), "host unplug left no handoff");
+    let guest_handoff = guest_session
+        .shared
+        .handoff
+        .lock()
+        .unwrap()
+        .take()
+        .expect("guest unplug left no handoff");
+    drop(host_session);
     drop(guest_session);
 
-    // Both sides recorded replays that parse and carry the session.
+    // The guest's machine continues solo from the unplug.
+    let binder = crate::platform::audio::LateBinder::new();
+    let resumed = local::resume(guest_handoff, crc, &binder, Arc::new(tokio::sync::Notify::new())).expect("resume");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let frontier = resumed.shared.stats.lock().unwrap().frontier;
+        if frontier > 30 {
+            break;
+        }
+        if let Some(end) = resumed.shared.end.lock().unwrap().clone() {
+            panic!("resumed session ended early: {end:?}");
+        }
+        assert!(Instant::now() < deadline, "resumed session never advanced");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    drop(resumed);
+
+    // Both sides recorded replays that parse, carry the session, and
+    // embed the boot captures playback needs.
     let mut replay_files: Vec<_> = std::fs::read_dir(replays_dir.path())
         .unwrap()
         .filter_map(|e| e.ok())
@@ -195,6 +283,11 @@ fn two_player_netplay_smoke() {
             replay.inputs.len()
         );
         assert_eq!(replay.metadata.players[0].rom_crc32, crc);
+        assert!(
+            replay.metadata.players.iter().all(|p| p.boot.is_some()),
+            "replay {} is missing boot captures",
+            path.display()
+        );
     }
 }
 
@@ -208,7 +301,7 @@ fn playback_engine_seek_is_exact() {
     let rom = mgba_siolink::testrom::build();
     let config = engine::BootConfig {
         roms: vec![rom.clone(), rom.clone()],
-        saves: vec![None, None],
+        boots: vec![None, None],
         rtc_unix_micros: Some(1_752_000_000_000_000),
     };
     // A varying input stream so states actually differ tick to tick.
@@ -262,7 +355,7 @@ fn playback_session_scrubs() {
                     rom_crc32: crc,
                     rom_title: "TESTROM".to_string(),
                     rom_code: "TEST".to_string(),
-                    save: None,
+                    boot: None,
                 })
                 .collect(),
         };

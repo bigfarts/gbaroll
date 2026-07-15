@@ -16,7 +16,7 @@ use futures::{SinkExt, StreamExt};
 use gbaroll_signaling::{ClientMessage, IceServer, ServerMessage};
 use tokio_tungstenite::tungstenite::protocol::Message;
 
-use crate::net::protocol::{PeerControl, PeerSignal, NET_VERSION};
+use crate::net::protocol::{PeerControl, PeerSignal, BOOT_CHUNK, MAX_BOOT_SIZE, NET_VERSION};
 
 /// One connected mesh edge, ready for a session.
 pub struct PeerLink {
@@ -353,4 +353,76 @@ where
         .await
         .context("send signal")?;
     Ok(())
+}
+
+/// How long the boot-payload exchange has after the mesh is up. Nothing
+/// here waits on a human — every client captures and sends as soon as its
+/// UI notices the start — so this only catches dead peers.
+const EXCHANGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The plug-in exchange: ship this side's encoded boot payload to every
+/// peer and collect theirs, over the reliable control channels (chunked —
+/// a payload is several hundred KiB and the datachannel message cap is
+/// 256 KiB). Returns the payloads in player order, the local slot filled
+/// with `blob` itself.
+pub async fn exchange_boots(
+    links: &mut [PeerLink],
+    local_player: usize,
+    num_players: usize,
+    blob: Vec<u8>,
+) -> anyhow::Result<Vec<Vec<u8>>> {
+    let swaps = links.iter_mut().map(|link| {
+        let PeerLink {
+            player,
+            ctl_tx,
+            ctl_rx,
+            ..
+        } = link;
+        let blob = &blob;
+        async move {
+            let send = async {
+                let announce = bincode::serialize(&PeerControl::Boot {
+                    len: blob.len() as u32,
+                })?;
+                ctl_tx.send(&announce).await.context("announce boot payload")?;
+                for chunk in blob.chunks(BOOT_CHUNK) {
+                    let msg = bincode::serialize(&PeerControl::BootChunk(chunk.to_vec()))?;
+                    ctl_tx.send(&msg).await.context("send boot chunk")?;
+                }
+                anyhow::Ok(())
+            };
+            let recv = async {
+                let msg = ctl_rx.receive().await.context("control channel closed before boot payload")?;
+                let len = match bincode::deserialize::<PeerControl>(&msg).context("bad boot announcement")? {
+                    PeerControl::Boot { len } => len as usize,
+                    PeerControl::Quit => anyhow::bail!("player {} left before the session", *player + 1),
+                    other => anyhow::bail!("expected a boot payload, got {other:?}"),
+                };
+                anyhow::ensure!(len <= MAX_BOOT_SIZE, "boot payload implausibly large ({len} bytes)");
+                let mut buf = Vec::with_capacity(len);
+                while buf.len() < len {
+                    let msg = ctl_rx.receive().await.context("control channel closed mid boot payload")?;
+                    match bincode::deserialize::<PeerControl>(&msg).context("bad boot chunk")? {
+                        PeerControl::BootChunk(bytes) => buf.extend_from_slice(&bytes),
+                        other => anyhow::bail!("expected a boot chunk, got {other:?}"),
+                    }
+                }
+                anyhow::ensure!(buf.len() == len, "boot payload overran its announced length");
+                anyhow::Ok((*player, buf))
+            };
+            let ((), received) = futures::future::try_join(send, recv).await?;
+            anyhow::Ok(received)
+        }
+    });
+
+    let received = tokio::time::timeout(EXCHANGE_TIMEOUT, futures::future::try_join_all(swaps))
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out exchanging boot payloads"))??;
+
+    let mut boots = vec![Vec::new(); num_players];
+    boots[local_player] = blob;
+    for (player, bytes) in received {
+        boots[player] = bytes;
+    }
+    Ok(boots)
 }

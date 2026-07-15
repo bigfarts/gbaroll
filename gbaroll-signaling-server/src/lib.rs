@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use futures::{SinkExt, StreamExt};
 use gbaroll_signaling::{
     decode, encode, normalize_room_code, ClientMessage, ErrorKind, IceServer, PlayerInfo, ServerMessage, StartPlayer,
-    MAX_PLAYERS, MAX_SAVE_SIZE, PROTOCOL_VERSION, ROOM_CODE_ALPHABET, ROOM_CODE_LEN,
+    MAX_PLAYERS, PROTOCOL_VERSION, ROOM_CODE_ALPHABET, ROOM_CODE_LEN,
 };
 use rand::Rng;
 use tokio::net::{TcpListener, TcpStream};
@@ -24,7 +24,6 @@ struct Player {
     ready: bool,
     rom_crc32: u32,
     rom_title: String,
-    save: Option<Vec<u8>>,
     tx: mpsc::UnboundedSender<ServerMessage>,
     /// False once the player's socket is gone. Started rooms keep the
     /// seat (indices are frozen core indices — the signal relay
@@ -45,7 +44,7 @@ impl Room {
             .map(|(i, p)| PlayerInfo {
                 nick: p.nick.clone(),
                 // The host never readies up; their seat always reads
-                // ready (their save rides the Start message).
+                // ready.
                 ready: i == 0 || p.ready,
                 rom_crc32: p.rom_crc32,
                 rom_title: p.rom_title.clone(),
@@ -54,12 +53,10 @@ impl Room {
     }
 
     /// Occupancy changed: whatever anyone agreed to ready up for no
-    /// longer describes the room, so ready state (and the saves behind
-    /// it) resets for everyone.
+    /// longer describes the room, so ready state resets for everyone.
     fn reset_ready(&mut self) {
         for p in &mut self.players {
             p.ready = false;
-            p.save = None;
         }
     }
 
@@ -244,7 +241,6 @@ fn handle_message(
                         ready: false,
                         rom_crc32,
                         rom_title: rom_title.clone(),
-                        save: None,
                         tx: tx.clone(),
                         connected: true,
                     }],
@@ -291,7 +287,6 @@ fn handle_message(
                 ready: false,
                 rom_crc32,
                 rom_title,
-                save: None,
                 tx: tx.clone(),
                 connected: true,
             });
@@ -301,12 +296,8 @@ fn handle_message(
             *membership = Some(Membership { code, tx: tx.clone() });
             true
         }
-        ClientMessage::SetReady { ready, save } => {
+        ClientMessage::SetReady { ready } => {
             let Some(m) = membership.as_ref() else { return true };
-            if save.as_ref().is_some_and(|s| s.len() > MAX_SAVE_SIZE) {
-                send_error(tx, ErrorKind::Malformed, "save image too large");
-                return true;
-            }
             let mut rooms = rooms.lock().unwrap();
             let Some(room) = rooms.get_mut(&m.code) else { return true };
             if room.started {
@@ -314,12 +305,10 @@ fn handle_message(
             }
             let Some(i) = player_idx(room, &m.tx) else { return true };
             if i == 0 {
-                // The host doesn't ready up; their save arrives with
-                // Start.
+                // The host doesn't ready up.
                 return true;
             }
             room.players[i].ready = ready;
-            room.players[i].save = if ready { save } else { None };
             room.broadcast_roster();
             true
         }
@@ -336,12 +325,8 @@ fn handle_message(
             });
             true
         }
-        ClientMessage::Start { save } => {
+        ClientMessage::Start => {
             let Some(m) = membership.as_ref() else { return true };
-            if save.as_ref().is_some_and(|s| s.len() > MAX_SAVE_SIZE) {
-                send_error(tx, ErrorKind::Malformed, "save image too large");
-                return true;
-            }
             let mut rooms = rooms.lock().unwrap();
             let Some(room) = rooms.get_mut(&m.code) else { return true };
             if room.started {
@@ -356,7 +341,6 @@ fn handle_message(
                 send_error(tx, ErrorKind::NotEveryoneReady, "need 2+ players, all ready");
                 return true;
             }
-            room.players[0].save = save;
             room.started = true;
             let clock_unix_micros = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -368,7 +352,6 @@ fn handle_message(
                 .map(|p| StartPlayer {
                     nick: p.nick.clone(),
                     rom_crc32: p.rom_crc32,
-                    save: p.save.clone(),
                 })
                 .collect();
             log::info!("room {} starting with {} players", m.code, players.len());
@@ -378,10 +361,6 @@ fn handle_message(
                     players: players.clone(),
                     your_idx: idx as u8,
                 });
-            }
-            // The saves have been handed out; no need to keep them.
-            for p in &mut room.players {
-                p.save = None;
             }
             true
         }

@@ -57,7 +57,7 @@ pub fn start(
 
     let boot = BootConfig {
         roms: args.roms,
-        saves: args.replay.metadata.players.iter().map(|p| p.save.clone()).collect(),
+        boots: args.replay.metadata.players.iter().map(|p| p.boot.clone()).collect(),
         rtc_unix_micros: args.replay.metadata.rtc_unix_micros,
     };
     let inputs: Arc<Vec<Vec<u32>>> = Arc::new(args.replay.inputs);
@@ -82,6 +82,7 @@ pub fn start(
         nicks: args.replay.metadata.players.iter().map(|p| p.nick.clone()).collect(),
         room_code: None,
         replay_path: Some(args.path),
+        rom_crc32: None,
     };
 
     let audio = audio_binder
@@ -155,6 +156,7 @@ pub fn start(
     Ok(SessionRuntime {
         shared,
         descriptor,
+        link: None,
         playback: Some(PlaybackHandles {
             seek: seek.clone(),
             snapshots,

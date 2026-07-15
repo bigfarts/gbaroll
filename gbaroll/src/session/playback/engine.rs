@@ -213,7 +213,11 @@ impl RewindRing {
 #[derive(Clone)]
 pub struct BootConfig {
     pub roms: Vec<Vec<u8>>,
-    pub saves: Vec<Option<Vec<u8>>>,
+    /// Per player, the encoded boot payload the recording started from
+    /// (the replay's `PlayerMeta::boot`). All-or-nothing: either every
+    /// side has one (the session was a plugged-in cable) or none does (a
+    /// power-on boot, e.g. synthesized test replays).
+    pub boots: Vec<Option<Vec<u8>>>,
     pub rtc_unix_micros: Option<u64>,
 }
 
@@ -222,23 +226,46 @@ impl BootConfig {
         self.roms.len()
     }
 
-    /// Boot a link poised at tick 0 (a hard reset — gbaroll sessions
-    /// need no priming; the recording starts at boot).
+    /// Boot a link poised at tick 0: the recorded plug-in captures when
+    /// the replay carries them, a hard reset otherwise. Either way the
+    /// recording's tick 0 is exactly this state — no priming.
     pub fn boot(&self) -> anyhow::Result<mgba_siolink::Link> {
-        let mut link = mgba_siolink::Link::with_options(mgba_siolink::LinkOptions {
-            sides: self
+        let rtc = Some(
+            self.rtc_unix_micros
+                .map(|us| std::time::UNIX_EPOCH + std::time::Duration::from_micros(us))
+                .unwrap_or_else(|| std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000)),
+        );
+        let mut link = if self.boots.iter().all(|b| b.is_some()) {
+            let sides = self
                 .roms
                 .iter()
                 .cloned()
-                .zip(self.saves.iter().cloned())
-                .map(|(rom, save)| mgba_siolink::SideOptions { rom, save })
-                .collect(),
-            rtc: Some(
-                self.rtc_unix_micros
-                    .map(|us| std::time::UNIX_EPOCH + std::time::Duration::from_micros(us))
-                    .unwrap_or_else(|| std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000)),
-            ),
-        })?;
+                .zip(self.boots.iter())
+                .map(|(rom, boot)| {
+                    let blob = crate::net::protocol::BootBlob::decode(boot.as_deref().unwrap())?;
+                    anyhow::Ok(mgba_siolink::BootSide {
+                        rom,
+                        save: blob.save,
+                        state: blob.state,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            mgba_siolink::Link::from_states(sides, rtc)?
+        } else {
+            anyhow::ensure!(
+                self.boots.iter().all(|b| b.is_none()),
+                "replay mixes captured and power-on sides"
+            );
+            mgba_siolink::Link::with_options(mgba_siolink::LinkOptions {
+                sides: self
+                    .roms
+                    .iter()
+                    .cloned()
+                    .map(|rom| mgba_siolink::SideOptions { rom, save: None })
+                    .collect(),
+                rtc,
+            })?
+        };
         crate::session::prepare_audio_buffers(&mut link);
         Ok(link)
     }

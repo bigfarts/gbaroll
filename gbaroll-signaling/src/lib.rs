@@ -2,12 +2,12 @@
 //! rollback sessions.
 //!
 //! The server's job is small: it hosts named rooms of up to
-//! [`MAX_PLAYERS`], assigns player indices, collects each player's save
-//! image behind their ready flag, broadcasts the session start (with a
-//! shared wall clock every cart RTC is pinned to), and from then on
-//! blindly relays opaque peer-to-peer signals (SDP descriptions/
-//! candidates) so the peers can build a full WebRTC mesh. Game data
-//! never touches the server.
+//! [`MAX_PLAYERS`], assigns player indices, broadcasts the session start
+//! (with a shared wall clock every cart RTC is pinned to), and from then
+//! on blindly relays opaque peer-to-peer signals (SDP descriptions/
+//! candidates) so the peers can build a full WebRTC mesh. Game data —
+//! including everyone's boot state — never touches the server; the peers
+//! exchange it over the mesh once it is up.
 //!
 //! Each player brings their *own* ROM (each GBA on a real cable has its
 //! own cart, and they need not be identical — think version pairings).
@@ -24,14 +24,10 @@ use serde::{Deserialize, Serialize};
 
 /// Bumped on any incompatible protocol change. Carried on the first
 /// message (create/join); the server rejects mismatches.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Most players a room holds — the size of a real multi-cable chain.
 pub const MAX_PLAYERS: usize = 4;
-
-/// Upper bound on an embedded save image (GBA flash tops out at 128 KiB;
-/// leave headroom for emulator save footers).
-pub const MAX_SAVE_SIZE: usize = 512 * 1024;
 
 /// Length of a generated room code.
 pub const ROOM_CODE_LEN: usize = 6;
@@ -60,19 +56,14 @@ pub enum ClientMessage {
         rom_crc32: u32,
         rom_title: String,
     },
-    /// Flip the ready flag. Readying up commits the save image the
-    /// player's side will boot with (`None` = fresh save); un-readying
-    /// discards it.
-    SetReady {
-        ready: bool,
-        save: Option<Vec<u8>>,
-    },
+    /// Flip the ready flag.
+    SetReady { ready: bool },
     /// Lobby chat, broadcast to the room.
     Chat { text: String },
     /// Host only: lock the room and start the session. Requires at
-    /// least 2 players and every non-host player ready — the host
-    /// never readies up; their save rides along here instead.
-    Start { save: Option<Vec<u8>> },
+    /// least 2 players and every non-host player ready (the host never
+    /// readies up).
+    Start,
     /// Relay an opaque peer signal (SDP/candidate) to another player in
     /// the room. Only meaningful once the room has started.
     Signal { to: u8, payload: Vec<u8> },
@@ -100,15 +91,15 @@ pub struct PlayerInfo {
     pub rom_title: String,
 }
 
-/// One player's boot payload in the start broadcast.
+/// One player's identity in the start broadcast. Boot payloads (each
+/// side's live capture) travel peer-to-peer once the mesh is up, not
+/// through the server.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StartPlayer {
     pub nick: String,
     /// The ROM this player's side runs (each peer resolves it from its
     /// own library).
     pub rom_crc32: u32,
-    /// The save image that player committed when readying up.
-    pub save: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -143,8 +134,8 @@ pub enum ServerMessage {
     },
     Chat { from: u8, nick: String, text: String },
     /// The room is locked and the session begins. Every peer builds the
-    /// same link: `players[i]`'s save on side `i`, everyone's cart RTC
-    /// pinned to `clock_unix_micros`.
+    /// same link — `players[i]`'s capture (exchanged over the mesh) on
+    /// side `i`, everyone's cart RTC pinned to `clock_unix_micros`.
     Starting {
         clock_unix_micros: u64,
         players: Vec<StartPlayer>,
@@ -192,10 +183,7 @@ mod tests {
                 rom_crc32: 0xdeadbeef,
                 rom_title: "TESTGAME".into(),
             },
-            ClientMessage::SetReady {
-                ready: true,
-                save: Some(vec![0u8; 32]),
-            },
+            ClientMessage::SetReady { ready: true },
             ClientMessage::Signal {
                 to: 2,
                 payload: vec![1, 2, 3],
@@ -212,12 +200,10 @@ mod tests {
                 StartPlayer {
                     nick: "a".into(),
                     rom_crc32: 1,
-                    save: None,
                 },
                 StartPlayer {
                     nick: "b".into(),
                     rom_crc32: 2,
-                    save: Some(vec![9]),
                 },
             ],
             your_idx: 1,
