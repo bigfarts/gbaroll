@@ -227,6 +227,16 @@ fn header(state: &State) -> Element<'_, Message> {
     container(content).padding([4, 8]).width(Length::Fill).into()
 }
 
+/// The transport play/pause button glyph for the session's logical state.
+fn play_pause_icon<'a>(state: &State) -> iced::widget::Text<'a> {
+    let glyph = if state.playing() {
+        super::icons::Icon::Pause
+    } else {
+        super::icons::Icon::Play
+    };
+    super::icons::icon(glyph, 16.0)
+}
+
 fn transport(state: &State) -> Element<'_, Message> {
     let shared = &state.runtime.shared;
     let d = &state.runtime.descriptor;
@@ -242,7 +252,6 @@ fn transport(state: &State) -> Element<'_, Message> {
                 .map(|h| h.prefetch_progress.load(Ordering::Relaxed))
                 .unwrap_or(0);
 
-            let play_label = if state.playing() { "⏸" } else { "▶" };
             let bar = super::scrubber::Scrubber::new(
                 position,
                 total,
@@ -253,7 +262,7 @@ fn transport(state: &State) -> Element<'_, Message> {
             .view();
 
             row![
-                button(text(play_label)).padding([4, 10]).on_press(Message::SessionPauseToggled),
+                button(play_pause_icon(state)).padding([6, 10]).on_press(Message::SessionPauseToggled),
                 pick_list(
                     SPEED_CHOICES.to_vec(),
                     Some(SpeedChoice(state.selected_speed)),
@@ -278,11 +287,9 @@ fn transport(state: &State) -> Element<'_, Message> {
             .into()
         }
         SessionKind::Local => {
-            let mut items = row![
-                button(text(if state.playing() { "⏸" } else { "▶" }))
-                    .padding([4, 10])
-                    .on_press(Message::SessionPauseToggled),
-            ]
+            let mut items = row![button(play_pause_icon(state))
+                .padding([6, 10])
+                .on_press(Message::SessionPauseToggled)]
             .spacing(8)
             .align_y(iced::Alignment::Center);
             if d.num_players > 1 {
@@ -468,8 +475,8 @@ fn end_overlay(state: &State) -> Element<'_, Message> {
 fn modal_card<'a>(title: String, body: Element<'a, Message>) -> Element<'a, Message> {
     let head = row![
         text(title).size(18).width(Length::Fill),
-        button(text("✕").size(16))
-            .padding([2, 8])
+        button(super::icons::icon(super::icons::Icon::X, 18.0))
+            .padding([4, 8])
             .style(button::text)
             .on_press(Message::SessionLinkToggle),
     ]

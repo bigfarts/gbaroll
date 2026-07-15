@@ -47,6 +47,8 @@ fn main() -> iced::Result {
             vsync: false,
             ..iced::Settings::default()
         })
+        // The lucide icon font, referenced everywhere as `ui::icons::LUCIDE`.
+        .font(lucide_icons::lucide_font_bytes())
         .title(ui::App::title)
         .theme(ui::App::theme)
         .subscription(ui::App::subscription)

@@ -10,6 +10,10 @@ use super::Message;
 use crate::library::Library;
 use crate::net::lobby::LobbyHandle;
 
+/// Fixed height for every roster slot (filled or open), so someone
+/// joining never shifts the layout.
+const SLOT_HEIGHT: f32 = 52.0;
+
 pub struct State {
     pub handle: LobbyHandle,
     pub code: Option<String>,
@@ -70,8 +74,10 @@ pub fn content<'a>(state: &'a State, library: &'a Library) -> Element<'a, Messag
                 ]
                 .spacing(3),
             )
-            .padding([8, 10])
+            .padding([0, 10])
             .width(Length::Fill)
+            .height(Length::Fixed(SLOT_HEIGHT))
+            .align_y(iced::alignment::Vertical::Center)
             // Set the text colour to the palette's paired text for each
             // background, so ready rows aren't unreadable light-on-green.
             .style(move |theme: &Theme| {
@@ -92,11 +98,25 @@ pub fn content<'a>(state: &'a State, library: &'a Library) -> Element<'a, Messag
             }),
         );
     }
+    // Open seats are the same fixed height as filled ones, so a join never
+    // reflows the roster.
     for i in state.players.len()..gbaroll_signaling::MAX_PLAYERS {
         slots = slots.push(
-            container(text(format!("P{} — open", i + 1)).size(13))
-                .padding([8, 10])
-                .width(Length::Fill),
+            container(text(format!("P{} — open", i + 1)).size(13).style(|theme: &Theme| text::Style {
+                color: Some(theme.extended_palette().background.strong.color),
+            }))
+            .padding([0, 10])
+            .width(Length::Fill)
+            .height(Length::Fixed(SLOT_HEIGHT))
+            .align_y(iced::alignment::Vertical::Center)
+            .style(|theme: &Theme| container::Style {
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    width: 1.0,
+                    color: theme.extended_palette().background.weak.color,
+                },
+                ..Default::default()
+            }),
         );
     }
 

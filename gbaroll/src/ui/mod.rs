@@ -4,6 +4,7 @@
 //! plugs in when the room starts (runtime swap to netplay), and any
 //! netplay teardown unplugs back to solo.
 
+pub mod icons;
 mod lobby;
 mod play;
 mod replays;

@@ -1428,6 +1428,7 @@ dependencies = [
  "gbaroll-signaling-server",
  "iced",
  "log",
+ "lucide-icons",
  "mgba",
  "mgba-siolink",
  "quick-xml 0.36.2",
@@ -2424,6 +2425,12 @@ name = "lru"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f66e8d5d03f609abc3a39e6f08e4164ebf1447a732906d39eb9b99b7919ef39"
+
+[[package]]
+name = "lucide-icons"
+version = "0.501.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7aa7fc8c30387a155b237acd6f4a971adac3aa9123b691d0e14a631c166d96e"
 
 [[package]]
 name = "lyon"
