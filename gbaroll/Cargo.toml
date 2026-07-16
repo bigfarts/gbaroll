@@ -92,6 +92,9 @@ web-sys = { version = "0.3", features = [
     "RtcPeerConnectionIceEvent",
     "RtcIceCandidate",
     "RtcPeerConnectionState",
+    "BeforeUnloadEvent",
+    "CanvasRenderingContext2d",
+    "Clipboard",
 ] }
 console_error_panic_hook = "0.1"
 console_log = "1"

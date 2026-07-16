@@ -9,6 +9,7 @@ mod play;
 mod session_view;
 mod settings;
 mod shell;
+mod telemetry;
 
 pub use shell::App;
 

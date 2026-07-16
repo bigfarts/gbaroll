@@ -140,7 +140,14 @@ pub fn PlayScreen() -> Element {
                                                     }
                                                     None => None,
                                                 };
-                                                if let Err(e) = crate::web::boot(runtime, bytes, save).await {
+                                                // SRAM writes back into the picked save, or a
+                                                // fresh "<name>.sav" the first time it persists.
+                                                let save_file = save_name.clone().unwrap_or_else(|| {
+                                                    format!("{}.sav", info.display_name())
+                                                });
+                                                if let Err(e) =
+                                                    crate::web::boot(runtime, bytes, save, Some(save_file)).await
+                                                {
                                                     notice.set(Some(format!("couldn't start session: {e:#}")));
                                                 }
                                             });
@@ -278,7 +285,8 @@ pub fn PlayScreen() -> Element {
                         let runtime = runtime.clone();
                         spawn(async move {
                             if let Err(e) =
-                                crate::web::boot(runtime, mgba_siolink::testrom::build(), None).await
+                                crate::web::boot(runtime, mgba_siolink::testrom::build(), None, None)
+                                    .await
                             {
                                 notice.set(Some(format!("couldn't start session: {e:#}")));
                             }

@@ -140,3 +140,138 @@ pub fn Keyboard() -> Element {
         }
     }
 }
+
+#[component]
+pub fn Cable() -> Element {
+    rsx! {
+        Lucide {
+            path { d: "M17 21v-2a1 1 0 0 1-1-1v-1a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1a1 1 0 0 1-1 1v2" }
+            path { d: "M19 15V6.5a1 1 0 0 0-7 0v11a1 1 0 0 1-7 0V9" }
+            path { d: "M21 21v-2h-4" }
+            path { d: "M3 5h4V3" }
+            path { d: "M7 5a1 1 0 0 1 1 1v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1V3" }
+        }
+    }
+}
+
+#[component]
+pub fn Unplug() -> Element {
+    rsx! {
+        Lucide {
+            path { d: "m19 5 3-3" }
+            path { d: "m2 22 3-3" }
+            path { d: "M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z" }
+            path { d: "M7.5 13.5 10 11" }
+            path { d: "M10.5 16.5 13 14" }
+            path { d: "m12 6 6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0Z" }
+        }
+    }
+}
+
+#[component]
+pub fn Gauge() -> Element {
+    rsx! {
+        Lucide {
+            path { d: "m12 14 4-4" }
+            path { d: "M3.34 19a10 10 0 1 1 17.32 0" }
+        }
+    }
+}
+
+#[component]
+pub fn ArrowLeftRight() -> Element {
+    rsx! {
+        Lucide {
+            path { d: "M8 3 4 7l4 4" }
+            path { d: "M4 7h16" }
+            path { d: "m16 21 4-4-4-4" }
+            path { d: "M20 17H4" }
+        }
+    }
+}
+
+#[component]
+pub fn Footprints() -> Element {
+    rsx! {
+        Lucide {
+            path { d: "M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z" }
+            path { d: "M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z" }
+            path { d: "M16 17h4" }
+            path { d: "M4 13h4" }
+        }
+    }
+}
+
+#[component]
+pub fn GitMerge() -> Element {
+    rsx! {
+        Lucide {
+            circle { cx: "18", cy: "18", r: "3" }
+            circle { cx: "6", cy: "6", r: "3" }
+            path { d: "M6 21V9a9 9 0 0 0 9 9" }
+        }
+    }
+}
+
+#[component]
+pub fn Wifi() -> Element {
+    rsx! {
+        Lucide {
+            path { d: "M12 20h.01" }
+            path { d: "M2 8.82a15 15 0 0 1 20 0" }
+            path { d: "M5 12.859a10 10 0 0 1 14 0" }
+            path { d: "M8.5 16.429a5 5 0 0 1 7 0" }
+        }
+    }
+}
+
+#[component]
+pub fn SignalHigh() -> Element {
+    rsx! {
+        Lucide {
+            path { d: "M2 20h.01" }
+            path { d: "M7 20v-4" }
+            path { d: "M12 20v-8" }
+            path { d: "M17 20V8" }
+        }
+    }
+}
+
+#[component]
+pub fn SignalMedium() -> Element {
+    rsx! {
+        Lucide {
+            path { d: "M2 20h.01" }
+            path { d: "M7 20v-4" }
+            path { d: "M12 20v-8" }
+        }
+    }
+}
+
+#[component]
+pub fn SignalLow() -> Element {
+    rsx! {
+        Lucide {
+            path { d: "M2 20h.01" }
+            path { d: "M7 20v-4" }
+        }
+    }
+}
+
+#[component]
+pub fn ChevronUp() -> Element {
+    rsx! {
+        Lucide { path { d: "m18 15-6-6-6 6" } }
+    }
+}
+
+#[component]
+pub fn Timer() -> Element {
+    rsx! {
+        Lucide {
+            line { x1: "10", x2: "14", y1: "2", y2: "2" }
+            line { x1: "12", x2: "15", y1: "14", y2: "11" }
+            circle { cx: "12", cy: "14", r: "8" }
+        }
+    }
+}

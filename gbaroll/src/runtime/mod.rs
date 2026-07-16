@@ -48,6 +48,10 @@ pub static SESSION_EPOCH: GlobalSignal<u64> = Signal::global(|| 0);
 /// because the document keyboard listener owns the Escape toggle.
 pub static MENU_OPEN: GlobalSignal<bool> = Signal::global(|| false);
 
+/// The top-right cable/telemetry panel. Escape collapses it before it
+/// opens the menu, keeping a running lobby visible in the background.
+pub static PANEL_OPEN: GlobalSignal<bool> = Signal::global(|| false);
+
 /// Binding capture: the settings screen sets this to the key being
 /// rebound; the next keyboard press (document listener) or gamepad
 /// button/axis edge (pump) lands in [`CAPTURED`]. Escape cancels.
@@ -121,6 +125,16 @@ pub struct Runtime {
     clock: clock::TickClock,
     pub held: input::HeldState,
     pub mapping: input::Mapping,
+    /// OPFS, once the UI has it — the SRAM write-back target.
+    storage: Option<crate::storage::Storage>,
+    /// The telemetry panel's sample ring, captured per netplay frame.
+    metric_history: std::collections::VecDeque<crate::session::MetricSample>,
+    /// The saves/ file the running cart persists into, chosen at boot;
+    /// survives plug-in/unplug swaps (same cart), cleared on close.
+    save_file: Option<String>,
+    /// CRC of the last persisted SRAM, so the autosave skips no-ops.
+    saved_crc: Option<u32>,
+    last_autosave_ms: f64,
     /// The previous session's end, kept readable after teardown so the
     /// UI can say why; cleared by [`Self::dismiss_end`] or the next boot.
     last_end: Option<SessionEnd>,
@@ -155,6 +169,13 @@ impl Runtime {
             clock: clock::TickClock::new(),
             held: input::HeldState::default(),
             mapping: input::Mapping::default(),
+            storage: None,
+            metric_history: std::collections::VecDeque::with_capacity(
+                crate::session::HISTORY_LEN,
+            ),
+            save_file: None,
+            saved_crc: None,
+            last_autosave_ms: 0.0,
             last_end: None,
             capture_prev: None,
             _pumping: false,
@@ -162,10 +183,18 @@ impl Runtime {
         RUNTIME.with(|r| *r.borrow_mut() = Some(runtime.clone()));
         install_raf(Rc::downgrade(&runtime));
         install_keyboard(Rc::downgrade(&runtime));
+        install_beforeunload(Rc::downgrade(&runtime));
         runtime
     }
 
-    /// Attach (or replace) the presenter for the session canvas.
+    pub fn set_storage(&mut self, storage: crate::storage::Storage) {
+        self.storage = Some(storage);
+    }
+
+    /// Attach (or replace) the presenter for the session canvas, and
+    /// arm context-loss recovery: `webglcontextlost` must be
+    /// preventDefault'ed for the browser to restore the context, and
+    /// `webglcontextrestored` rebuilds the pipeline on the same canvas.
     pub fn attach_canvas(&mut self, canvas: &web_sys::HtmlCanvasElement) {
         match WebGlPresenter::new(canvas) {
             Ok(p) => {
@@ -175,6 +204,31 @@ impl Runtime {
             }
             Err(e) => log::error!("webgl presenter: {e}"),
         }
+
+        let lost: Closure<dyn FnMut(web_sys::Event)> = Closure::new(|e: web_sys::Event| {
+            log::warn!("webgl context lost");
+            e.prevent_default();
+        });
+        let restored: Closure<dyn FnMut(web_sys::Event)> = {
+            let canvas = canvas.clone();
+            Closure::new(move |_| {
+                log::warn!("webgl context restored; rebuilding the presenter");
+                if let Some(runtime) = RUNTIME.with(|r| r.borrow().clone()) {
+                    if let Ok(mut rt) = runtime.try_borrow_mut() {
+                        rt.attach_canvas(&canvas);
+                    }
+                }
+            })
+        };
+        let _ = canvas
+            .add_event_listener_with_callback("webglcontextlost", lost.as_ref().unchecked_ref());
+        let _ = canvas.add_event_listener_with_callback(
+            "webglcontextrestored",
+            restored.as_ref().unchecked_ref(),
+        );
+        // Canvas-lifetime listeners; the canvas node dies with the view.
+        lost.forget();
+        restored.forget();
     }
 
     pub fn detach_canvas(&mut self) {
@@ -183,24 +237,67 @@ impl Runtime {
 
     /// Boot a fresh solo session from ROM bytes. The caller must have
     /// ensured the audio sink exists (user-gesture requirement).
-    pub fn start_local(&mut self, rom: Vec<u8>, save: Option<Vec<u8>>) -> anyhow::Result<()> {
+    /// `save_file` is the saves/ name the cart persists back into
+    /// (write-back on quit/unplug + a 60s autosave); `None` disables
+    /// persistence (the test ROM).
+    pub fn start_local(
+        &mut self,
+        rom: Vec<u8>,
+        save: Option<Vec<u8>>,
+        save_file: Option<String>,
+    ) -> anyhow::Result<()> {
         self.close_session();
         let rom_crc32 = crc32fast::hash(&rom);
         let rtc = std::time::SystemTime::UNIX_EPOCH
             + std::time::Duration::from_millis(js_sys::Date::now() as u64);
+        self.saved_crc = save.as_deref().map(crc32fast::hash);
         let session = crate::session::local::start(LocalArgs {
             rom,
             rom_crc32,
             save,
             rtc,
         })?;
+        self.save_file = save_file;
+        self.last_autosave_ms = js_sys::Date::now();
         self.adopt_session(Session::Local(session));
         Ok(())
+    }
+
+    /// Persist SRAM into the chosen saves/ file (fire-and-forget; OPFS
+    /// writes are async and small). No-op when unchanged since the last
+    /// write.
+    fn persist_sram(&mut self, bytes: Option<Vec<u8>>) {
+        let (Some(bytes), Some(name), Some(storage)) = (bytes, &self.save_file, &self.storage)
+        else {
+            return;
+        };
+        let crc = crc32fast::hash(&bytes);
+        if self.saved_crc == Some(crc) {
+            return;
+        }
+        self.saved_crc = Some(crc);
+        let name = name.clone();
+        let storage = storage.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Err(e) = crate::storage::write(storage.saves(), &name, &bytes).await {
+                log::error!("couldn't write back {name}: {e}");
+            } else {
+                log::info!("saved {name} ({} bytes)", bytes.len());
+            }
+        });
+    }
+
+    /// Export the running cart's SRAM (the presented/local side).
+    fn export_sram(&self) -> Option<Vec<u8>> {
+        let session = self.session.as_ref()?;
+        let player = session.descriptor().local_player;
+        session.link().with_link(|link| link.export_save(player))?
     }
 
     /// Swap in a freshly booted session: bind its audio, prime the
     /// sink, reset the cadence, and tell the UI.
     fn adopt_session(&mut self, session: Session) {
+        self.metric_history.clear();
         let sample_rate = self.audio.as_ref().map(|a| a.sample_rate()).unwrap_or(48_000);
         self.audio_binder.set_sample_rate(sample_rate);
         self.audio_binding = self
@@ -314,6 +411,11 @@ impl Runtime {
     }
 
     pub fn close_session(&mut self) {
+        // Write the cart's SRAM back before the machine goes away.
+        let sram = self.export_sram();
+        self.persist_sram(sram);
+        self.save_file = None;
+        self.saved_crc = None;
         self.audio_binding = None;
         *MENU_OPEN.write() = false;
         if self.session.take().is_some() {
@@ -336,6 +438,11 @@ impl Runtime {
 
     pub fn descriptor(&self) -> Option<&SessionDescriptor> {
         self.session.as_ref().map(|s| s.descriptor())
+    }
+
+    /// The telemetry panel's sample ring (netplay only; cleared on swap).
+    pub fn metric_history(&self) -> &std::collections::VecDeque<crate::session::MetricSample> {
+        &self.metric_history
     }
 
     /// Install the audio sink (built asynchronously from a user
@@ -456,6 +563,11 @@ impl Runtime {
                         let rom_crc32 =
                             session.descriptor().rom_crc32.unwrap_or_default();
                         let handoff = shared.handoff.lock().unwrap().take();
+                        // The unplug snapshot is durable regardless of
+                        // whether the solo continuation succeeds.
+                        if let Some(handoff) = &handoff {
+                            self.persist_sram(handoff.save.clone());
+                        }
                         let continued = match (was_netplay && end.unplugs(), handoff) {
                             (true, Some(handoff)) => {
                                 self.unplug_continue(handoff, rom_crc32, unplug_reason(&end))
@@ -479,6 +591,35 @@ impl Runtime {
         if let (Some(audio), true) = (&mut self.audio, self.session.is_some()) {
             audio.resume_if_suspended();
             audio.pump(&mut self.audio_binder);
+        }
+
+        // Solo autosave: SRAM back to OPFS every minute when it changed
+        // (a tab kill then loses at most this window). Netplay never
+        // autosaves mid-session — the frontier's SRAM is speculative
+        // under rollback; it persists at end/unplug instead.
+        if self.save_file.is_some()
+            && self.session.as_ref().map(|s| s.kind()) == Some(SessionKind::Local)
+            && now_ms - self.last_autosave_ms > 60_000.0
+        {
+            self.last_autosave_ms = now_ms;
+            let sram = self.export_sram();
+            self.persist_sram(sram);
+        }
+
+        // Telemetry: one sample per changed pump while the cable is in
+        // (the engine's stats are already per-frame; a batch shares its
+        // newest reading, matching the native per-frame-notify capture).
+        if changed {
+            if let Some(session) = &self.session {
+                if session.kind() == SessionKind::Netplay {
+                    let sample =
+                        crate::session::MetricSample::capture(&session.shared().stats.lock().unwrap());
+                    if self.metric_history.len() == crate::session::HISTORY_LEN {
+                        self.metric_history.pop_front();
+                    }
+                    self.metric_history.push_back(sample);
+                }
+            }
         }
 
         // Debug probe: the simulated frontier, readable from devtools /
@@ -561,6 +702,27 @@ fn request_animation_frame(closure: &Closure<dyn FnMut(f64)>) {
         .expect("requestAnimationFrame");
 }
 
+/// Warn before the tab closes over a live session: OPFS writes are
+/// async and can't complete during unload, so "use Quit to save" — the
+/// autosave interval bounds the loss either way.
+fn install_beforeunload(runtime: Weak<RefCell<Runtime>>) {
+    let window = web_sys::window().unwrap();
+    let closure: Closure<dyn FnMut(web_sys::BeforeUnloadEvent)> =
+        Closure::new(move |e: web_sys::BeforeUnloadEvent| {
+            let Some(rt) = runtime.upgrade() else { return };
+            let Ok(rt) = rt.try_borrow() else { return };
+            if rt.shared().is_some() {
+                e.prevent_default();
+                // Legacy engines want a non-empty returnValue.
+                e.set_return_value("A game is running.");
+            }
+        });
+    window
+        .add_event_listener_with_callback("beforeunload", closure.as_ref().unchecked_ref())
+        .expect("addEventListener");
+    closure.forget();
+}
+
 fn install_keyboard(runtime: Weak<RefCell<Runtime>>) {
     let document = web_sys::window().unwrap().document().unwrap();
     for (event, pressed) in [("keydown", true), ("keyup", false)] {
@@ -592,11 +754,16 @@ fn install_keyboard(runtime: Weak<RefCell<Runtime>>) {
                 }
                 let Some(rt) = runtime.upgrade() else { return };
                 let Ok(mut rt) = rt.try_borrow_mut() else { return };
-                // Escape drives the session menu, never the game.
+                // Escape drives the overlays, never the game: it
+                // collapses the cable panel first, then toggles the menu.
                 if code == "Escape" {
                     if pressed && rt.shared().is_some() {
-                        let open = *MENU_OPEN.peek();
-                        *MENU_OPEN.write() = !open;
+                        if *PANEL_OPEN.peek() && !*MENU_OPEN.peek() {
+                            *PANEL_OPEN.write() = false;
+                        } else {
+                            let open = *MENU_OPEN.peek();
+                            *MENU_OPEN.write() = !open;
+                        }
                         e.prevent_default();
                     }
                     return;

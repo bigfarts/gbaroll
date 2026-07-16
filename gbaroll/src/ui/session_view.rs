@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
-use super::{cable, icons, use_ctx, Ctx};
+use super::{cable, icons, telemetry, use_ctx, Ctx};
 use crate::platform::input::{self, MappedKey};
 use crate::runtime::{FRAME_REV, MENU_OPEN, SESSION_EPOCH};
 use crate::session::{SessionEnd, SessionKind};
@@ -142,6 +142,11 @@ pub fn SessionView() -> Element {
                     height: "480",
                     class: if !config.read().integer_scaling { "fit" },
                 }
+                // The cable/telemetry overlay keeps its corner in every
+                // cable state; the menu and end overlays sit above it.
+                if end.is_none() && !menu_open && running {
+                    telemetry::CableOverlay {}
+                }
             }
             if let Some(end) = end {
                 div { class: "overlay",
@@ -164,7 +169,6 @@ pub fn SessionView() -> Element {
                             h2 { "{title}" }
                             p { class: "sub", "{caption}" }
                         }
-                        cable::CablePanel {}
                         div { class: "menu-volume",
                             label { "Volume · {volume_pct}%" }
                             input {

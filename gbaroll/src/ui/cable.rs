@@ -1,8 +1,7 @@
-//! The link cable panel, rendered inside the session menu overlay: room
-//! create/join while offline, the roster while a lobby runs, and the
-//! connection readout (peers, RTT, present delay, unplug) once the
-//! cable is in. One spawned drain task per lobby owns the event stream
-//! and drives the whole plug-in flow — capture on `Starting`, ROM
+//! The cable panel's offline/lobby body (the connected state lives in
+//! `telemetry.rs`): room create/join, then the roster while the lobby
+//! runs. One spawned drain task per lobby owns the event stream and
+//! drives the whole plug-in flow — capture on `Starting`, ROM
 //! resolution + `Runtime::plug_in` on `SessionReady`.
 
 use std::cell::RefCell;
@@ -12,8 +11,7 @@ use gbaroll_signaling::PlayerInfo;
 
 use super::{use_ctx, Ctx};
 use crate::net::lobby::{self, LobbyCommand, LobbyEvent, LobbyMode};
-use crate::runtime::{FRAME_REV, LINK_NOTICE, SESSION_EPOCH};
-use crate::session::SessionKind;
+use crate::runtime::{LINK_NOTICE, PANEL_OPEN, SESSION_EPOCH};
 
 /// The roster mirror the panel renders; `None` = no lobby running.
 pub static LOBBY_UI: GlobalSignal<Option<LobbyUi>> = Signal::global(|| None);
@@ -101,6 +99,7 @@ fn start_lobby(ctx: &Ctx, mode: LobbyMode) {
     });
     *LINK_NOTICE.write() = None;
     *LOBBY_UI.write() = Some(LobbyUi::default());
+    *PANEL_OPEN.write() = true;
     drain(ctx.clone(), handle);
 }
 
@@ -237,29 +236,16 @@ fn sanitize_room_code(input: &str) -> String {
         .collect()
 }
 
+/// The panel body while the cable is out: create/join, then the roster.
+/// (The connected state is `telemetry::CableOverlay`'s card.)
 #[component]
-pub fn CablePanel() -> Element {
+pub fn CableBody() -> Element {
     let ctx = use_ctx();
     let mut code_entry = use_signal(String::new);
 
     let _ = SESSION_EPOCH.read();
-    let _ = FRAME_REV.read();
     let notice = LINK_NOTICE.read().clone();
     let lobby_ui = LOBBY_UI.read().clone();
-
-    let (is_netplay, room_code, peers, present_delay) = {
-        let rt = ctx.runtime.borrow();
-        match rt.descriptor() {
-            Some(d) if d.kind == SessionKind::Netplay => {
-                let peers = rt
-                    .shared()
-                    .map(|s| s.stats.lock().unwrap().peers.clone())
-                    .unwrap_or_default();
-                (true, d.room_code.clone(), peers, ctx.config.read().present_delay)
-            }
-            _ => (false, None, Vec::new(), ctx.config.read().present_delay),
-        }
-    };
 
     // My library, for the "you need a copy of every ROM" roster check.
     let have_crc = {
@@ -274,54 +260,10 @@ pub fn CablePanel() -> Element {
 
     rsx! {
         div { class: "cable",
-            h3 { "Link cable" }
             if let Some(notice) = notice {
                 p { class: "link-notice", "{notice}" }
             }
-            if is_netplay {
-                // Connected: the cable is in.
-                if let Some(code) = room_code {
-                    p { class: "sub", "Room {code}" }
-                }
-                for peer in peers.iter() {
-                    p { class: "sub",
-                        "{peer.nick}"
-                        if let Some(rtt) = peer.rtt_ms {
-                            span { class: "rtt", " · {rtt:.0}ms" }
-                        }
-                    }
-                }
-                div { class: "menu-actions",
-                    label {
-                        "Input delay "
-                        input {
-                            r#type: "number",
-                            min: "0",
-                            max: "10",
-                            value: "{present_delay}",
-                            oninput: {
-                                let ctx = ctx.clone();
-                                move |evt: FormEvent| {
-                                    if let Ok(v) = evt.value().parse::<u32>() {
-                                        let v = v.min(10);
-                                        let mut config = ctx.config;
-                                        config.with_mut(|c| c.present_delay = v);
-                                        ctx.runtime.borrow().set_present_delay(v);
-                                    }
-                                }
-                            },
-                        }
-                    }
-                    button {
-                        class: "btn danger",
-                        onclick: {
-                            let ctx = ctx.clone();
-                            move |_| ctx.runtime.borrow().unplug()
-                        },
-                        "Unplug"
-                    }
-                }
-            } else if let Some(ui) = lobby_ui {
+            if let Some(ui) = lobby_ui {
                 // Lobby: the roster, waiting for the start.
                 if let Some(code) = &ui.code {
                     p { "Room code: " code { class: "room-code", "{code}" } }

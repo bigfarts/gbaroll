@@ -563,3 +563,122 @@ kbd {
 .end-message {
     font-size: 15px;
 }
+
+/* ---- cable / telemetry overlay (top-right of the stage) ---- */
+
+.stage {
+    position: relative;
+}
+
+.cable-overlay {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    z-index: 5;
+}
+
+.btn.status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+}
+
+.tele-card {
+    width: 264px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+.tele-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.tele-head h3 {
+    margin: 0;
+    font-size: 14px;
+}
+
+.metric-card {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.metric-caption {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.metric-caption .metric-value {
+    margin-left: auto;
+}
+
+.spark-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.spark-row canvas {
+    flex: 1;
+    height: 24px;
+    border-radius: 4px;
+    image-rendering: auto;
+}
+
+.metric-value {
+    min-width: 58px;
+    text-align: right;
+    font-size: 13px;
+}
+
+.mono {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.room-code-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+}
+
+.room-code-label {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    gap: 1px;
+}
+
+.room-code {
+    font-size: 18px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    letter-spacing: 0.08em;
+}
+
+.link-notice {
+    color: var(--danger);
+    font-size: 12px;
+}
+
+.cable .rtt {
+    color: var(--muted);
+}

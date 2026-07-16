@@ -33,6 +33,7 @@ pub async fn boot(
     runtime: std::rc::Rc<std::cell::RefCell<Runtime>>,
     rom: Vec<u8>,
     save: Option<Vec<u8>>,
+    save_file: Option<String>,
 ) -> anyhow::Result<()> {
     if !runtime.borrow().has_audio() {
         match crate::platform::audio::web::WebAudio::create(&WORKLET_JS.to_string(), || {
@@ -44,7 +45,7 @@ pub async fn boot(
             Err(e) => log::error!("audio unavailable: {e:?}"),
         }
     }
-    runtime.borrow_mut().start_local(rom, save)
+    runtime.borrow_mut().start_local(rom, save, save_file)
 }
 
 /// Import picked files into OPFS, routed by extension (ROMs vs saves).

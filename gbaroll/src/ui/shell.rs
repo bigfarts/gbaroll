@@ -69,6 +69,16 @@ pub fn App() -> Element {
         selected_save,
     });
 
+    // The runtime persists SRAM (and netplay recordings) into OPFS.
+    {
+        let runtime = runtime.clone();
+        use_effect(move || {
+            if let Some(Some(storage)) = storage.read().clone() {
+                runtime.borrow_mut().set_storage(storage);
+            }
+        });
+    }
+
     // Persist every config edit; the screens just mutate the signal.
     use_effect(move || config.read().save());
 

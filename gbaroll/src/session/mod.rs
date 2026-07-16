@@ -109,8 +109,37 @@ pub struct PeerStat {
     pub rtt_ms: Option<f32>,
 }
 
-// Read by the session view / telemetry panel as their ports land
-// (M4/M5); written by the drivers from day one.
+/// Samples retained per metric (~3 s at the GBA tick rate), matching
+/// tango's window.
+pub const HISTORY_LEN: usize = 180;
+
+/// One per-frame snapshot, kept in a ring buffer so each telemetry
+/// metric can draw a sparkline. `pings` is indexed by peer slot (same
+/// order as [`Stats::peers`]).
+#[derive(Clone)]
+pub struct MetricSample {
+    pub tps: f32,
+    pub fps_target: f32,
+    pub skew: i32,
+    pub lead: i32,
+    pub depth: u32,
+    pub pings: Vec<Option<f32>>,
+}
+
+impl MetricSample {
+    pub fn capture(stats: &Stats) -> Self {
+        Self {
+            tps: stats.tps,
+            fps_target: stats.fps_target,
+            skew: stats.skew,
+            lead: stats.queue_len as i32,
+            depth: stats.rolled_back,
+            pings: stats.peers.iter().map(|p| p.rtt_ms).collect(),
+        }
+    }
+}
+
+// Written by the drivers; read by the session view and telemetry panel.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct Stats {
