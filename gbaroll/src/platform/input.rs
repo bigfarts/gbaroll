@@ -96,7 +96,6 @@ pub enum GamepadButton {
 
 impl GamepadButton {
     /// Display label for the settings UI.
-    #[allow(dead_code)] // settings UI (M4)
     pub fn label(&self) -> &'static str {
         match self {
             Self::South => "A/Cross",
@@ -143,7 +142,6 @@ pub enum GamepadAxis {
 impl GamepadAxis {
     /// Display label for the settings UI. The `+`/`−` direction sign
     /// is prepended separately by the caller.
-    #[allow(dead_code)] // settings UI (M4)
     pub fn label(&self) -> &'static str {
         match self {
             Self::LeftStickX => "Left stick X",
@@ -219,7 +217,6 @@ impl Default for Mapping {
 impl Mapping {
     /// The binding list for one mapped key. Used by the settings
     /// editor's console view to look up each key it draws.
-    #[allow(dead_code)] // settings UI (M4)
     pub fn slot(&self, key: MappedKey) -> &Vec<PhysicalInput> {
         match key {
             MappedKey::Up => &self.up,
@@ -236,7 +233,6 @@ impl Mapping {
         }
     }
 
-    #[allow(dead_code)] // settings UI (M4)
     pub fn slot_mut(&mut self, key: MappedKey) -> &mut Vec<PhysicalInput> {
         match key {
             MappedKey::Up => &mut self.up,
@@ -306,9 +302,50 @@ impl Mapping {
     }
 }
 
+/// Every gamepad-sourced binding the capture flow can observe: the
+/// buttons the browser's "standard" mapping produces (see
+/// `platform::gamepad`), plus both directions of every axis. Keyboard
+/// capture doesn't enumerate — it takes whatever code the event carries.
+pub fn gamepad_candidates() -> Vec<PhysicalInput> {
+    const BUTTONS: [GamepadButton; 16] = [
+        GamepadButton::South,
+        GamepadButton::East,
+        GamepadButton::West,
+        GamepadButton::North,
+        GamepadButton::Select,
+        GamepadButton::Start,
+        GamepadButton::Mode,
+        GamepadButton::LeftThumb,
+        GamepadButton::RightThumb,
+        GamepadButton::LeftShoulder,
+        GamepadButton::RightShoulder,
+        GamepadButton::DPadUp,
+        GamepadButton::DPadDown,
+        GamepadButton::DPadLeft,
+        GamepadButton::DPadRight,
+        GamepadButton::Touchpad,
+    ];
+    const AXES: [GamepadAxis; 6] = [
+        GamepadAxis::LeftStickX,
+        GamepadAxis::LeftStickY,
+        GamepadAxis::RightStickX,
+        GamepadAxis::RightStickY,
+        GamepadAxis::TriggerLeft,
+        GamepadAxis::TriggerRight,
+    ];
+    BUTTONS
+        .into_iter()
+        .map(PhysicalInput::Button)
+        .chain(AXES.into_iter().flat_map(|axis| {
+            [AxisDir::Positive, AxisDir::Negative]
+                .into_iter()
+                .map(move |dir| PhysicalInput::Axis { axis, dir })
+        }))
+        .collect()
+}
+
 /// The mgba keys the user can rebind. Drives the settings UI
 /// layout + the per-key add/remove flow.
-#[allow(dead_code)] // settings UI (M4)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MappedKey {
     Up,
@@ -383,7 +420,6 @@ impl HeldState {
 
 /// What kind of physical source produced a binding. Used by the
 /// settings UI to pick the right glyph for the chip.
-#[allow(dead_code)] // settings UI (M4)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DescribeKind {
     Keyboard,
@@ -393,7 +429,6 @@ pub enum DescribeKind {
 /// Pretty-print a binding for the settings UI. Returns the source
 /// kind (keyboard vs gamepad) and a label. Keyboard key names are
 /// the DOM `code` identifiers.
-#[allow(dead_code)] // settings UI (M4)
 pub fn describe(p: &PhysicalInput) -> (DescribeKind, String) {
     match p {
         PhysicalInput::Key(c) => (DescribeKind::Keyboard, c.0.clone()),

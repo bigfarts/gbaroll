@@ -12,7 +12,18 @@ publish = false
 # Engine (lives in the tango workspace next door).
 mgba.workspace = true
 mgba-siolink.workspace = true
+rennet.workspace = true
 
+gbaroll-signaling = { path = "../gbaroll-signaling" }
+
+bincode.workspace = true
+# Boot-payload compression for the plug-in exchange (and replays).
+# zstd-sys builds its wasm-shim C with the wasi-sdk clang from
+# .cargo/config.toml's CC_wasm32_unknown_unknown.
+zstd = "0.13"
+futures.workspace = true
+gloo-timers = { version = "0.3", features = ["futures"] }
+web-time = "1"
 crc32fast.workspace = true
 log.workspace = true
 anyhow.workspace = true
@@ -49,6 +60,7 @@ web-sys = { version = "0.3", features = [
     "BaseAudioContext",
     "AudioWorklet",
     "AudioWorkletNode",
+    "AudioWorkletNodeOptions",
     "AudioNode",
     "AudioDestinationNode",
     "MessagePort",
@@ -65,6 +77,21 @@ web-sys = { version = "0.3", features = [
     "Response",
     "Url",
     "HtmlAnchorElement",
+    "WebSocket",
+    "BinaryType",
+    "RtcPeerConnection",
+    "RtcConfiguration",
+    "RtcIceServer",
+    "RtcDataChannel",
+    "RtcDataChannelInit",
+    "RtcDataChannelType",
+    "RtcSessionDescription",
+    "RtcSessionDescriptionInit",
+    "RtcSdpType",
+    "RtcIceCandidateInit",
+    "RtcPeerConnectionIceEvent",
+    "RtcIceCandidate",
+    "RtcPeerConnectionState",
 ] }
 console_error_panic_hook = "0.1"
 console_log = "1"

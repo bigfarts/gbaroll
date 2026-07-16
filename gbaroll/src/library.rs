@@ -22,10 +22,8 @@ pub struct RomInfo {
     /// The ROM header's internal title (0xA0..0xAC, ASCII, NUL-padded).
     pub title: String,
     /// The ROM header's game code (0xAC..0xB0).
-    #[allow(dead_code)] // netplay ROM identity (M5)
     pub code: String,
     pub crc32: u32,
-    #[allow(dead_code)] // shown in the library UI (M4)
     pub size: u64,
     /// The No-Intro name for this ROM, when a loaded DAT knows its CRC.
     pub dat_name: Option<String>,
@@ -77,7 +75,6 @@ impl Library {
         Library { roms }
     }
 
-    #[allow(dead_code)] // netplay roster checks (M5)
     pub fn by_crc32(&self, crc32: u32) -> Option<&RomInfo> {
         self.roms.iter().find(|r| r.crc32 == crc32)
     }

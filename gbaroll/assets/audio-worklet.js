@@ -36,18 +36,28 @@ class GbarollSink extends AudioWorkletProcessor {
     process(inputs, outputs) {
         const out = outputs[0];
         const left = out[0];
-        const right = out[1] || out[0];
+        // A mono output (shouldn't happen — the node declares stereo)
+        // gets a proper downmix rather than one side of every pan.
+        const right = out[1] || null;
         const n = left.length;
         for (let i = 0; i < n; i++) {
             if (this.len > 0) {
                 const r = this.readPos * 2;
-                left[i] = this.ring[r] / 32768;
-                right[i] = this.ring[r + 1] / 32768;
+                const l = this.ring[r] / 32768;
+                const rr = this.ring[r + 1] / 32768;
+                if (right) {
+                    left[i] = l;
+                    right[i] = rr;
+                } else {
+                    left[i] = (l + rr) / 2;
+                }
                 this.readPos = (this.readPos + 1) % this.capacity;
                 this.len--;
             } else {
                 left[i] = 0;
-                right[i] = 0;
+                if (right) {
+                    right[i] = 0;
+                }
             }
         }
         if (++this.sinceReport >= 4) {

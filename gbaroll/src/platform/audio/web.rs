@@ -52,7 +52,14 @@ impl WebAudio {
         opts.set_sample_rate(48_000.0);
         let ctx = web_sys::AudioContext::new_with_context_options(&opts)?;
         JsFuture::from(ctx.audio_worklet()?.add_module(worklet_url)?).await?;
-        let node = web_sys::AudioWorkletNode::new(&ctx, "gbaroll-sink")?;
+        // Without an explicit outputChannelCount, a worklet node with an
+        // unconnected input computes a MONO output — and a mono sink
+        // silently drops one side of every pan.
+        let node_opts = web_sys::AudioWorkletNodeOptions::new();
+        let counts = js_sys::Array::of1(&wasm_bindgen::JsValue::from_f64(2.0));
+        node_opts.set_output_channel_count(&counts);
+        let node =
+            web_sys::AudioWorkletNode::new_with_options(&ctx, "gbaroll-sink", &node_opts)?;
         node.connect_with_audio_node(&ctx.destination())?;
 
         let reported_queued = Rc::new(Cell::new(0u32));

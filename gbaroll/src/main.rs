@@ -23,6 +23,7 @@ mod platform;
 mod runtime;
 mod session;
 mod storage;
+mod ui;
 mod web;
 
 fn main() {

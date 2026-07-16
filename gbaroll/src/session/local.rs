@@ -28,7 +28,6 @@ pub struct LocalSession {
     pub driver: LocalDriver,
     pub shared: Arc<SharedSession>,
     pub link: LinkAccess,
-    #[allow(dead_code)] // read by the session view (M4)
     pub descriptor: SessionDescriptor,
 }
 

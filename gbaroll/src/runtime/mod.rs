@@ -18,6 +18,7 @@
 pub mod clock;
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::{Rc, Weak};
 
 use dioxus::prelude::*;
@@ -29,7 +30,7 @@ use crate::platform::audio::{Binding, LateBinder, LinkStream};
 use crate::platform::video::webgl::WebGlPresenter;
 use crate::platform::{gamepad, input};
 use crate::session::local::{LocalArgs, LocalSession};
-use crate::session::SharedSession;
+use crate::session::{SessionDescriptor, SessionEnd, SharedSession};
 
 /// Bumped once per pump that changed anything the reactive UI shows
 /// (new frame, session end, boot). The canvas is NOT a subscriber —
@@ -39,6 +40,20 @@ pub static FRAME_REV: GlobalSignal<u64> = Signal::global(|| 0);
 
 /// Bumped on session start/swap/close — drives structural UI changes.
 pub static SESSION_EPOCH: GlobalSignal<u64> = Signal::global(|| 0);
+
+/// The session menu overlay. It lives here rather than in the UI
+/// because the document keyboard listener owns the Escape toggle.
+pub static MENU_OPEN: GlobalSignal<bool> = Signal::global(|| false);
+
+/// Binding capture: the settings screen sets this to the key being
+/// rebound; the next keyboard press (document listener) or gamepad
+/// button/axis edge (pump) lands in [`CAPTURED`]. Escape cancels.
+pub static CAPTURE_TARGET: GlobalSignal<Option<input::MappedKey>> = Signal::global(|| None);
+
+/// The capture flow's result, consumed (and cleared) by the settings
+/// screen, which applies it to both the Config and [`Runtime::mapping`].
+pub static CAPTURED: GlobalSignal<Option<(input::MappedKey, input::PhysicalInput)>> =
+    Signal::global(|| None);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PumpSource {
@@ -57,6 +72,13 @@ pub struct Runtime {
     clock: clock::TickClock,
     pub held: input::HeldState,
     pub mapping: input::Mapping,
+    /// The previous session's end, kept readable after teardown so the
+    /// UI can say why; cleared by [`Self::dismiss_end`] or the next boot.
+    last_end: Option<SessionEnd>,
+    /// Gamepad state on the previous capture-scan pump — binding capture
+    /// fires on edges, and the first scan only seeds this baseline so an
+    /// already-held input can't bind itself.
+    capture_prev: Option<HashSet<input::PhysicalInput>>,
     /// Set while the pump runs — the keyboard handlers and UI callbacks
     /// re-borrow the Runtime, and anything that could re-enter must not.
     _pumping: bool,
@@ -84,6 +106,8 @@ impl Runtime {
             clock: clock::TickClock::new(),
             held: input::HeldState::default(),
             mapping: input::Mapping::default(),
+            last_end: None,
+            capture_prev: None,
             _pumping: false,
         }));
         RUNTIME.with(|r| *r.borrow_mut() = Some(runtime.clone()));
@@ -104,7 +128,6 @@ impl Runtime {
         }
     }
 
-    #[allow(dead_code)] // session view unmount (M4)
     pub fn detach_canvas(&mut self) {
         self.presenter = None;
     }
@@ -139,15 +162,34 @@ impl Runtime {
             audio.prime(2048);
         }
         self.clock.reset();
+        self.last_end = None;
         *SESSION_EPOCH.write() += 1;
         Ok(())
     }
 
     pub fn close_session(&mut self) {
         self.audio_binding = None;
+        *MENU_OPEN.write() = false;
         if self.session.take().is_some() {
             *SESSION_EPOCH.write() += 1;
         }
+    }
+
+    /// Why the last session ended. Outlives the session (which is torn
+    /// down on the pump that saw it end) so the UI can show an end
+    /// overlay until [`Self::dismiss_end`].
+    pub fn last_end(&self) -> Option<SessionEnd> {
+        self.last_end.clone()
+    }
+
+    pub fn dismiss_end(&mut self) {
+        if self.last_end.take().is_some() {
+            *SESSION_EPOCH.write() += 1;
+        }
+    }
+
+    pub fn descriptor(&self) -> Option<&SessionDescriptor> {
+        self.session.as_ref().map(|s| &s.descriptor)
     }
 
     /// Install the audio sink (built asynchronously from a user
@@ -189,6 +231,27 @@ impl Runtime {
     pub fn pump(&mut self, source: PumpSource) {
         let now_ms = performance_now();
 
+        // Binding capture: gamepad button/axis edges become the pending
+        // binding (keyboard capture lives in the document listener).
+        if CAPTURE_TARGET.peek().is_some() {
+            let mut snap = input::HeldState::default();
+            gamepad::poll_into(&mut snap);
+            let active: HashSet<input::PhysicalInput> = input::gamepad_candidates()
+                .into_iter()
+                .filter(|p| snap.is_active(p))
+                .collect();
+            if let Some(prev) = &self.capture_prev {
+                if let Some(physical) = active.iter().find(|p| !prev.contains(*p)).cloned() {
+                    if let Some(key) = CAPTURE_TARGET.write().take() {
+                        *CAPTURED.write() = Some((key, physical));
+                    }
+                }
+            }
+            self.capture_prev = Some(active);
+        } else if self.capture_prev.is_some() {
+            self.capture_prev = None;
+        }
+
         // Input: gamepad snapshot + the held keyboard state → joyflags.
         if let Some(session) = &self.session {
             gamepad::poll_into(&mut self.held);
@@ -229,10 +292,12 @@ impl Runtime {
                 .max(crate::session::EXPECTED_FPS * 0.25); // fresh boots start at 0
                 for _ in 0..self.clock.due(now_ms, fps) {
                     if !session.driver.tick() {
-                        // Ended: drop the session on this pump; the end
-                        // reason stays readable via the UI's own copy.
+                        // Ended: tear the session down on this pump, but
+                        // keep the reason readable until the UI dismisses
+                        // its end overlay.
                         let end = shared.end.lock().unwrap().clone();
                         log::info!("session ended: {end:?}");
+                        self.last_end = Some(end.unwrap_or(SessionEnd::LocalQuit));
                         self.close_session();
                         changed = true;
                         break;
@@ -331,9 +396,32 @@ fn install_keyboard(runtime: Weak<RefCell<Runtime>>) {
                         }
                     }
                 }
+                let code = e.code();
+                // Binding capture: the next key press becomes the binding
+                // (Escape cancels); either way, neither the game nor the
+                // browser sees it.
+                if pressed && CAPTURE_TARGET.peek().is_some() {
+                    if let Some(key) = CAPTURE_TARGET.write().take() {
+                        if code != "Escape" {
+                            *CAPTURED.write() =
+                                Some((key, input::PhysicalInput::Key(code.as_str().into())));
+                        }
+                    }
+                    e.prevent_default();
+                    return;
+                }
                 let Some(rt) = runtime.upgrade() else { return };
                 let Ok(mut rt) = rt.try_borrow_mut() else { return };
-                if rt.key_event(&e.code(), pressed) {
+                // Escape drives the session menu, never the game.
+                if code == "Escape" {
+                    if pressed && rt.shared().is_some() {
+                        let open = *MENU_OPEN.peek();
+                        *MENU_OPEN.write() = !open;
+                        e.prevent_default();
+                    }
+                    return;
+                }
+                if rt.key_event(&code, pressed) {
                     // Bound key: don't let arrows/space scroll the page.
                     e.prevent_default();
                 }
