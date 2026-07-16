@@ -25,6 +25,7 @@ pub struct RomInfo {
     #[allow(dead_code)] // netplay ROM identity (M5)
     pub code: String,
     pub crc32: u32,
+    #[allow(dead_code)] // shown in the library UI (M4)
     pub size: u64,
     /// The No-Intro name for this ROM, when a loaded DAT knows its CRC.
     pub dat_name: Option<String>,
