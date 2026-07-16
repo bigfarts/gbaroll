@@ -38,8 +38,11 @@ jobs:
 
       - uses: cargo-bins/cargo-binstall@main
 
+      # --force: the rust-cache restores ~/.cargo's install manifest
+      # but not the binaries, so binstall would otherwise skip the
+      # install as "already done" on every cache hit.
       - name: Install dioxus-cli
-        run: cargo binstall --no-confirm dioxus-cli@0.7.9
+        run: cargo binstall --no-confirm --force dioxus-cli@0.7.9
 
       - name: Build the web bundle
         run: dx build --package gbaroll --release
