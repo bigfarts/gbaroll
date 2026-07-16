@@ -4,11 +4,11 @@
 //! plain link on one machine) — publish the same [`SharedSession`] so
 //! the session view renders them uniformly.
 //!
-//! `netplay.rs` (M5) and `playback/` (replay support, kept but not yet
-//! exposed on web) are present in-tree but not compiled until their
-//! ports land.
+//! `playback/` (replay support, kept but not yet exposed on web) is
+//! present in-tree but not compiled until its port lands.
 
 pub mod local;
+pub mod netplay;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

@@ -8,10 +8,10 @@ use std::sync::atomic::Ordering;
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
-use super::{icons, use_ctx, Ctx};
+use super::{cable, icons, use_ctx, Ctx};
 use crate::platform::input::{self, MappedKey};
 use crate::runtime::{FRAME_REV, MENU_OPEN, SESSION_EPOCH};
-use crate::session::SessionEnd;
+use crate::session::{SessionEnd, SessionKind};
 
 #[component]
 pub fn SessionView() -> Element {
@@ -48,7 +48,7 @@ pub fn SessionView() -> Element {
     let _ = SESSION_EPOCH.read();
     let menu_open = *MENU_OPEN.read();
 
-    let (title, running, paused, status, end) = {
+    let (title, running, paused, status, end, caption) = {
         let lib = library.read();
         let rt = runtime.borrow();
         let title = rt
@@ -61,6 +61,10 @@ pub fn SessionView() -> Element {
             })
             .map(|rom| rom.display_name().to_string())
             .unwrap_or_else(|| "Session".to_string());
+        let caption = match rt.descriptor().map(|d| d.kind) {
+            Some(SessionKind::Netplay) => "Netplay",
+            _ => "Playing solo",
+        };
         let end = rt.last_end();
         match rt.shared() {
             Some(shared) => {
@@ -71,9 +75,9 @@ pub fn SessionView() -> Element {
                 } else {
                     format!("frame {} · {:.1} fps", stats.frontier, stats.fps_target)
                 };
-                (title, true, paused, status, end)
+                (title, true, paused, status, end, caption)
             }
-            None => (title, false, false, String::new(), end),
+            None => (title, false, false, String::new(), end, caption),
         }
     };
 
@@ -106,7 +110,7 @@ pub fn SessionView() -> Element {
                 }
                 div { class: "session-title",
                     span { class: "game", "{title}" }
-                    span { class: "sub", "Playing solo" }
+                    span { class: "sub", "{caption}" }
                 }
                 div { class: "session-status",
                     if paused {
@@ -158,8 +162,9 @@ pub fn SessionView() -> Element {
                     div { class: "overlay-panel",
                         div { class: "overlay-head",
                             h2 { "{title}" }
-                            p { class: "sub", "Playing solo" }
+                            p { class: "sub", "{caption}" }
                         }
+                        cable::CablePanel {}
                         div { class: "menu-volume",
                             label { "Volume · {volume_pct}%" }
                             input {
@@ -184,7 +189,12 @@ pub fn SessionView() -> Element {
                                 class: "btn danger",
                                 onclick: {
                                     let runtime = runtime.clone();
-                                    move |_| runtime.borrow_mut().close_session()
+                                    move |_| {
+                                        // A lobby can't outlive the session
+                                        // it would plug into.
+                                        cable::leave();
+                                        runtime.borrow_mut().close_session()
+                                    }
                                 },
                                 "Quit game"
                             }

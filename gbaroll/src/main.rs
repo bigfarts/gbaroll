@@ -18,6 +18,7 @@ compile_error!("gbaroll is browser-only: build with `dx serve` (wasm32-unknown-u
 
 mod config;
 mod library;
+mod net;
 mod nointro;
 mod platform;
 mod runtime;

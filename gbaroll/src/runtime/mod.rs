@@ -30,7 +30,10 @@ use crate::platform::audio::{Binding, LateBinder, LinkStream};
 use crate::platform::video::webgl::WebGlPresenter;
 use crate::platform::{gamepad, input};
 use crate::session::local::{LocalArgs, LocalSession};
-use crate::session::{SessionDescriptor, SessionEnd, SharedSession};
+use crate::session::netplay::NetplaySession;
+use crate::session::{
+    Handoff, LinkAccess, SessionDescriptor, SessionEnd, SessionKind, SharedSession,
+};
 
 /// Bumped once per pump that changed anything the reactive UI shows
 /// (new frame, session end, boot). The canvas is NOT a subscriber —
@@ -55,14 +58,60 @@ pub static CAPTURE_TARGET: GlobalSignal<Option<input::MappedKey>> = Signal::glob
 pub static CAPTURED: GlobalSignal<Option<(input::MappedKey, input::PhysicalInput)>> =
     Signal::global(|| None);
 
+/// Why the cable last unplugged (or the lobby last failed), shown
+/// quietly in the cable panel. Written by the pump's unplug-continue
+/// path and the lobby drain task.
+pub static LINK_NOTICE: GlobalSignal<Option<String>> = Signal::global(|| None);
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PumpSource {
     Raf,
     Audio,
 }
 
+/// A running session of either kind, presented uniformly to the pump
+/// and the UI.
+pub enum Session {
+    Local(LocalSession),
+    Netplay(NetplaySession),
+}
+
+impl Session {
+    fn shared(&self) -> &std::sync::Arc<SharedSession> {
+        match self {
+            Session::Local(s) => &s.shared,
+            Session::Netplay(s) => &s.shared,
+        }
+    }
+
+    fn descriptor(&self) -> &SessionDescriptor {
+        match self {
+            Session::Local(s) => &s.descriptor,
+            Session::Netplay(s) => &s.descriptor,
+        }
+    }
+
+    fn link(&self) -> &LinkAccess {
+        match self {
+            Session::Local(s) => &s.link,
+            Session::Netplay(s) => &s.link,
+        }
+    }
+
+    fn tick(&mut self) -> bool {
+        match self {
+            Session::Local(s) => s.driver.tick(),
+            Session::Netplay(s) => s.driver.tick(),
+        }
+    }
+
+    fn kind(&self) -> SessionKind {
+        self.descriptor().kind
+    }
+}
+
 pub struct Runtime {
-    session: Option<LocalSession>,
+    session: Option<Session>,
     audio: Option<WebAudio>,
     audio_binder: LateBinder,
     /// RAII: unbinding returns the output to silence.
@@ -145,13 +194,20 @@ impl Runtime {
             save,
             rtc,
         })?;
+        self.adopt_session(Session::Local(session));
+        Ok(())
+    }
+
+    /// Swap in a freshly booted session: bind its audio, prime the
+    /// sink, reset the cadence, and tell the UI.
+    fn adopt_session(&mut self, session: Session) {
         let sample_rate = self.audio.as_ref().map(|a| a.sample_rate()).unwrap_or(48_000);
         self.audio_binder.set_sample_rate(sample_rate);
         self.audio_binding = self
             .audio_binder
             .bind(Some(Box::new(LinkStream::new(
-                session.link.clone(),
-                session.shared.clone(),
+                session.link().clone(),
+                session.shared().clone(),
                 sample_rate,
             ))))
             .ok();
@@ -164,7 +220,97 @@ impl Runtime {
         self.clock.reset();
         self.last_end = None;
         *SESSION_EPOCH.write() += 1;
+    }
+
+    /// Freeze the running solo machine and capture its encoded boot
+    /// payload — the local half of the plug-in exchange. The machine
+    /// stays frozen on exactly the captured state; a lobby failure
+    /// resumes it, a successful plug-in replaces it.
+    pub fn capture_boot_blob(&mut self) -> anyhow::Result<Vec<u8>> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("the game ended"))?;
+        let Session::Local(_) = session else {
+            anyhow::bail!("this session's machine can't be captured");
+        };
+        session
+            .shared()
+            .paused
+            .store(true, std::sync::atomic::Ordering::Release);
+        let blob = session
+            .link()
+            .with_link(|link| {
+                let state = link.capture_boot_state(0)?;
+                Ok::<_, mgba::Error>(crate::net::protocol::BootBlob {
+                    state,
+                    save: link.export_save(0),
+                })
+            })
+            .ok_or_else(|| anyhow::anyhow!("machine unavailable"))??;
+        blob.encode()
+    }
+
+    /// The cable plugs in: swap the frozen solo runtime for a netplay
+    /// session booted from the exchanged captures. The player's held
+    /// keys carry across the swap.
+    pub fn plug_in(
+        &mut self,
+        bundle: crate::net::lobby::SessionBundle,
+        roms: Vec<Vec<u8>>,
+        present_delay: u32,
+    ) -> anyhow::Result<()> {
+        if !matches!(self.session, Some(Session::Local(_))) {
+            anyhow::bail!("the game ended before the cable plugged in");
+        }
+        // The audio slot must free up before the netplay session binds.
+        self.audio_binding = None;
+        let session = crate::session::netplay::start(crate::session::netplay::NetplayArgs {
+            bundle,
+            roms,
+            present_delay,
+        })?;
+        self.adopt_session(Session::Netplay(session));
+        *MENU_OPEN.write() = false;
         Ok(())
+    }
+
+    /// Pull the cable: the netplay session ends on the next tick and
+    /// the machine continues solo from the teardown handoff.
+    pub fn unplug(&self) {
+        if let Some(session) = &self.session {
+            session
+                .shared()
+                .unplug
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    pub fn set_present_delay(&self, delay: u32) {
+        if let Some(session) = &self.session {
+            session
+                .shared()
+                .present_delay
+                .store(delay, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// The cable unplugs: swap the finished netplay session for a solo
+    /// continuation of the local machine.
+    fn unplug_continue(&mut self, handoff: Handoff, rom_crc32: u32, reason: String) -> bool {
+        self.audio_binding = None;
+        match crate::session::local::resume(handoff, rom_crc32) {
+            Ok(session) => {
+                self.adopt_session(Session::Local(session));
+                *LINK_NOTICE.write() = Some(reason);
+                true
+            }
+            Err(e) => {
+                // Fall back to the end overlay.
+                log::error!("couldn't continue solo after the unplug: {e:#}");
+                false
+            }
+        }
     }
 
     pub fn close_session(&mut self) {
@@ -189,7 +335,7 @@ impl Runtime {
     }
 
     pub fn descriptor(&self) -> Option<&SessionDescriptor> {
-        self.session.as_ref().map(|s| &s.descriptor)
+        self.session.as_ref().map(|s| s.descriptor())
     }
 
     /// Install the audio sink (built asynchronously from a user
@@ -204,7 +350,7 @@ impl Runtime {
     }
 
     pub fn shared(&self) -> Option<&std::sync::Arc<SharedSession>> {
-        self.session.as_ref().map(|s| &s.shared)
+        self.session.as_ref().map(|s| s.shared())
     }
 
     pub fn set_volume(&self, v: f32) {
@@ -257,25 +403,28 @@ impl Runtime {
             gamepad::poll_into(&mut self.held);
             let joyflags = self.mapping.to_mgba_keys(&self.held);
             session
-                .shared
+                .shared()
                 .joyflags
                 .store(joyflags, std::sync::atomic::Ordering::Relaxed);
-            // Hold-to-fast-forward.
-            let speed = if self.mapping.speed_up_held(&self.held) {
-                300
-            } else {
-                100
-            };
-            session
-                .shared
-                .speed
-                .store(speed, std::sync::atomic::Ordering::Relaxed);
+            // Hold-to-fast-forward — local sessions only; netplay pace
+            // belongs to the throttler.
+            if session.kind() == SessionKind::Local {
+                let speed = if self.mapping.speed_up_held(&self.held) {
+                    300
+                } else {
+                    100
+                };
+                session
+                    .shared()
+                    .speed
+                    .store(speed, std::sync::atomic::Ordering::Relaxed);
+            }
         }
 
         // Ticks.
         let mut changed = false;
         if let Some(session) = &mut self.session {
-            let shared = session.shared.clone();
+            let shared = session.shared().clone();
             let paused = shared.paused.load(std::sync::atomic::Ordering::Acquire);
             if paused {
                 shared.set_fps_target(0.0);
@@ -291,14 +440,32 @@ impl Runtime {
                 )
                 .max(crate::session::EXPECTED_FPS * 0.25); // fresh boots start at 0
                 for _ in 0..self.clock.due(now_ms, fps) {
-                    if !session.driver.tick() {
-                        // Ended: tear the session down on this pump, but
-                        // keep the reason readable until the UI dismisses
-                        // its end overlay.
-                        let end = shared.end.lock().unwrap().clone();
+                    if !session.tick() {
+                        // Ended. A netplay end that leaves a live machine
+                        // behind is a cable unplug: continue solo instead
+                        // of a dead end. Otherwise tear down, keeping the
+                        // reason readable until the UI dismisses it.
+                        let end = shared
+                            .end
+                            .lock()
+                            .unwrap()
+                            .clone()
+                            .unwrap_or(SessionEnd::LocalQuit);
                         log::info!("session ended: {end:?}");
-                        self.last_end = Some(end.unwrap_or(SessionEnd::LocalQuit));
-                        self.close_session();
+                        let was_netplay = session.kind() == SessionKind::Netplay;
+                        let rom_crc32 =
+                            session.descriptor().rom_crc32.unwrap_or_default();
+                        let handoff = shared.handoff.lock().unwrap().take();
+                        let continued = match (was_netplay && end.unplugs(), handoff) {
+                            (true, Some(handoff)) => {
+                                self.unplug_continue(handoff, rom_crc32, unplug_reason(&end))
+                            }
+                            _ => false,
+                        };
+                        if !continued {
+                            self.last_end = Some(end);
+                            self.close_session();
+                        }
                         changed = true;
                         break;
                     }
@@ -318,7 +485,7 @@ impl Runtime {
         // automation even while the tab is hidden and the UI is frozen.
         if changed {
             if let Some(session) = &self.session {
-                let frontier = session.shared.stats.lock().unwrap().frontier;
+                let frontier = session.shared().stats.lock().unwrap().frontier;
                 let _ = js_sys::Reflect::set(
                     &js_sys::global(),
                     &"gbarollFrontier".into(),
@@ -331,12 +498,12 @@ impl Runtime {
         if source == PumpSource::Raf {
             if let (Some(presenter), Some(session)) = (&mut self.presenter, &self.session) {
                 let rev = session
-                    .shared
+                    .shared()
                     .vbuf_rev
                     .load(std::sync::atomic::Ordering::Acquire);
                 if rev != self.presented_rev {
                     self.presented_rev = rev;
-                    let vbuf = session.shared.vbuf.lock().unwrap();
+                    let vbuf = session.shared().vbuf.lock().unwrap();
                     presenter.present(&vbuf);
                 }
             }
@@ -349,6 +516,19 @@ impl Runtime {
 
 fn performance_now() -> f64 {
     web_sys::window().unwrap().performance().unwrap().now()
+}
+
+/// The cable-panel one-liner for an unplug that continued solo.
+fn unplug_reason(end: &SessionEnd) -> String {
+    match end {
+        SessionEnd::Unplugged => "Unplugged.".to_string(),
+        SessionEnd::PeerQuit { player } => format!("Player {} unplugged.", player + 1),
+        SessionEnd::PeerDisconnected { player } => {
+            format!("Connection to player {} lost.", player + 1)
+        }
+        SessionEnd::Desync { tick } => format!("Desync at tick {tick} — cable unplugged."),
+        _ => "Unplugged.".to_string(),
+    }
 }
 
 /// The worklet's queue-report hook: pump with the Audio source. Wired

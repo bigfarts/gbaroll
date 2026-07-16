@@ -78,6 +78,12 @@ impl LobbyHandle {
     pub fn send(&self, cmd: LobbyCommand) {
         let _ = self.cmd_tx.unbounded_send(cmd);
     }
+
+    /// A second command handle for UI controls that outlive the drain
+    /// task's ownership of this one.
+    pub fn sender(&self) -> mpsc::UnboundedSender<LobbyCommand> {
+        self.cmd_tx.clone()
+    }
 }
 
 impl Drop for LobbyHandle {

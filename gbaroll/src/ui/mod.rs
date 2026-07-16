@@ -3,6 +3,7 @@
 //! screen). A functional port of the retired native client's iced
 //! screens (`native-final` tag), reshaped for the DOM.
 
+mod cable;
 mod icons;
 mod play;
 mod session_view;

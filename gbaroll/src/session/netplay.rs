@@ -186,10 +186,10 @@ pub fn start(args: NetplayArgs) -> anyhow::Result<NetplaySession> {
     let mut link = Link::from_states(sides, Some(rtc))?;
     prepare_audio_buffers(&mut link);
 
-    let mut session = Session::new(link, local_player, args.present_delay)?;
+    let session = Session::new(link, local_player, args.present_delay)?;
     let link_handle = session.link_handle();
 
-    let driver = NetplayDriver {
+    let mut driver = NetplayDriver {
         shared: shared.clone(),
         local_player,
         local_rom,
@@ -204,7 +204,6 @@ pub fn start(args: NetplayArgs) -> anyhow::Result<NetplaySession> {
         last_heard: Vec::new(),
         tick_times: VecDeque::new(),
     };
-    let mut driver = driver;
     driver.last_heard = driver.peers.iter().map(|_| Instant::now()).collect();
 
     Ok(NetplaySession {
