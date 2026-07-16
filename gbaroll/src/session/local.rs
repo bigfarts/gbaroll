@@ -1,8 +1,5 @@
-//! A local link session: 1–4 cores on one machine, no rollback engine —
-//! the joypad drives whichever player is currently controlled and the
-//! rest idle. One core is the solo mode netplay plugs into and unplugs
-//! from; 2–4 are a whole link on one machine, useful for poking at a
-//! game's link mode (and for testing the whole client without a peer).
+//! A solo GBA session with no rollback engine. This is the machine that
+//! netplay plugs into and resumes after the virtual cable is unplugged.
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -10,16 +7,15 @@ use std::sync::{Arc, Mutex};
 use mgba_siolink::{BootSide, Link, LinkOptions, SideOptions};
 
 use crate::session::{
-    apply_view_frameskip, prepare_audio_buffers, Handoff, LinkAccess, Pacer, SessionDescriptor, SessionEnd,
-    SessionKind, SessionRuntime, SharedSession, EXPECTED_FPS, PAUSED_TICK,
+    prepare_audio_buffers, Handoff, LinkAccess, Pacer, SessionDescriptor, SessionEnd, SessionKind,
+    SessionRuntime, SharedSession, EXPECTED_FPS, PAUSED_TICK,
 };
 
 pub struct LocalArgs {
-    /// Per player, the ROM their side boots.
-    pub roms: Vec<Vec<u8>>,
-    /// CRC32 of the controlled player's ROM (for the session descriptor).
+    pub rom: Vec<u8>,
+    /// CRC32 of the ROM (for the session descriptor).
     pub rom_crc32: u32,
-    /// Save applied to every side (each GBA has its own identical cart).
+    /// Save data for the solo cart.
     pub save: Option<Vec<u8>>,
 }
 
@@ -30,14 +26,10 @@ pub fn start(
     frame_notify: Arc<tokio::sync::Notify>,
 ) -> anyhow::Result<SessionRuntime> {
     let link = Link::with_options(LinkOptions {
-        sides: args
-            .roms
-            .iter()
-            .map(|rom| SideOptions {
-                rom: rom.clone(),
-                save: args.save.clone(),
-            })
-            .collect(),
+        sides: vec![SideOptions {
+            rom: args.rom,
+            save: args.save,
+        }],
         rtc: Some(std::time::SystemTime::now()),
     })?;
     run(link, args.rom_crc32, audio_binder, frame_notify)
@@ -68,19 +60,16 @@ fn run(
     audio_binder: &crate::platform::audio::LateBinder,
     frame_notify: Arc<tokio::sync::Notify>,
 ) -> anyhow::Result<SessionRuntime> {
-    let num_players = link.num_players();
     prepare_audio_buffers(&mut link);
-    apply_view_frameskip(&mut link, 0);
     let link = Arc::new(Mutex::new(link));
 
     let shared = SharedSession::new(0, frame_notify);
     let descriptor = SessionDescriptor {
         kind: SessionKind::Local,
-        num_players,
+        num_players: 1,
         local_player: 0,
-        nicks: (0..num_players).map(|i| format!("Player {}", i + 1)).collect(),
+        nicks: vec!["Player 1".to_string()],
         room_code: None,
-        replay_path: None,
         rom_crc32: Some(rom_crc32),
     };
 
@@ -97,7 +86,7 @@ fn run(
         let link = link.clone();
         std::thread::Builder::new()
             .name("gbaroll-local-drive".to_owned())
-            .spawn(move || drive(shared, link, num_players))?
+            .spawn(move || drive(shared, link))?
     };
 
     Ok(SessionRuntime {
@@ -111,35 +100,29 @@ fn run(
     })
 }
 
-fn drive(shared: Arc<SharedSession>, link: Arc<Mutex<Link>>, num_players: usize) {
+fn drive(shared: Arc<SharedSession>, link: Arc<Mutex<Link>>) {
     let mut pacer = Pacer::new();
-    let mut last_view = 0usize;
 
     loop {
         if shared.quit.load(Ordering::Relaxed) {
             break;
         }
-        if shared.paused.load(Ordering::Relaxed) {
+        if shared.paused.load(Ordering::Acquire) {
             shared.set_fps_target(0.0);
             std::thread::sleep(PAUSED_TICK);
             pacer.reset();
             continue;
         }
+        if shared.take_pace_reset() {
+            pacer.reset();
+        }
 
-        // The viewed player is also the controlled one.
-        let view = shared.view_player.load(Ordering::Relaxed).min(num_players - 1);
         let joyflags = shared.joyflags.load(Ordering::Relaxed) & 0x3ff;
-        let mut keys = vec![0u32; num_players];
-        keys[view] = joyflags;
 
         {
             let mut link = link.lock().unwrap();
-            if view != last_view {
-                apply_view_frameskip(&mut link, view);
-                last_view = view;
-            }
-            link.tick(&keys);
-            if let Some(buf) = link.video_buffer(view) {
+            link.tick(&[joyflags]);
+            if let Some(buf) = link.video_buffer(0) {
                 shared.publish_video(buf);
             }
         }

@@ -135,7 +135,6 @@ pub fn start(
         local_player,
         nicks: bundle.players.iter().map(|p| p.nick.clone()).collect(),
         room_code: Some(bundle.room_code.clone()),
-        replay_path: None,
         rom_crc32: Some(bundle.players[local_player].rom_crc32),
     };
 

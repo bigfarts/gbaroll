@@ -4,17 +4,20 @@
 //! keeps every tick of the last ~1.5s so short backward steps land on
 //! exact snapshots, and seeks are asynchronous — requests land on a
 //! [`engine::SeekController`] and a dedicated worker chases the newest
-//! target, so the UI never blocks on catch-up emulation.
+//! target, so the UI never blocks on catch-up emulation. Rewind states are
+//! sampled rather than serialized every frame so playback stays real-time.
 
 pub mod engine;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use engine::{BootConfig, Playback, RewindRing, SeekController, SharedPlayback, Snapshot, SnapshotStore};
+use engine::{
+    BootConfig, Playback, RewindRing, SeekController, SharedPlayback, Snapshot, SnapshotStore,
+};
 
 use crate::session::{
-    LinkAccess, Pacer, SessionDescriptor, SessionEnd, SessionKind, SessionRuntime, SharedSession, EXPECTED_FPS,
+    Pacer, SessionDescriptor, SessionEnd, SessionKind, SessionRuntime, SharedSession, EXPECTED_FPS,
     PAUSED_TICK,
 };
 
@@ -23,7 +26,6 @@ pub struct PlaybackArgs {
     /// Per player, the ROM bytes (resolved from the library by the
     /// replay's per-player CRC32s).
     pub roms: Vec<Vec<u8>>,
-    pub path: std::path::PathBuf,
 }
 
 /// What the scrub UI drives: async seeks plus the snapshot stores it
@@ -57,7 +59,13 @@ pub fn start(
 
     let boot = BootConfig {
         roms: args.roms,
-        boots: args.replay.metadata.players.iter().map(|p| p.boot.clone()).collect(),
+        boots: args
+            .replay
+            .metadata
+            .players
+            .iter()
+            .map(|p| p.boot.clone())
+            .collect(),
         rtc_unix_micros: args.replay.metadata.rtc_unix_micros,
     };
     let inputs: Arc<Vec<Vec<u32>>> = Arc::new(args.replay.inputs);
@@ -65,7 +73,9 @@ pub fn start(
     let view = args.replay.metadata.local_player as usize;
 
     let shared = SharedSession::new(0, frame_notify);
-    shared.view_player.store(view.min(num_players - 1), Ordering::Relaxed);
+    shared
+        .view_player
+        .store(view.min(num_players - 1), Ordering::Relaxed);
     shared.total_ticks.store(total_ticks, Ordering::Relaxed);
 
     let playback: SharedPlayback = Arc::new(Mutex::new(None));
@@ -79,17 +89,22 @@ pub fn start(
         kind: SessionKind::Playback,
         num_players,
         local_player: view,
-        nicks: args.replay.metadata.players.iter().map(|p| p.nick.clone()).collect(),
+        nicks: args
+            .replay
+            .metadata
+            .players
+            .iter()
+            .map(|p| p.nick.clone())
+            .collect(),
         room_code: None,
-        replay_path: Some(args.path),
         rom_crc32: None,
     };
 
+    let replay_audio = crate::platform::audio::ReplayAudioQueue::new(audio_binder.sample_rate());
     let audio = audio_binder
-        .bind(Some(Box::new(crate::platform::audio::LinkStream::new(
-            LinkAccess::Playback(playback.clone()),
+        .bind(Some(Box::new(crate::platform::audio::ReplayStream::new(
+            replay_audio.clone(),
             shared.clone(),
-            audio_binder.sample_rate(),
         ))))
         .ok();
 
@@ -97,18 +112,31 @@ pub fn start(
 
     // The drive thread: boots the link (black + silence until it's up),
     // then paces the linear re-sim at the published fps target,
-    // capturing every tick into the rewind ring (keyframes shared into
-    // the store) and publishing frames.
+    // sampling recent rewind states (keyframes shared into the store)
+    // and publishing every frame.
     threads.push(
-        std::thread::Builder::new().name("gbaroll-playback-drive".to_owned()).spawn({
-            let boot = boot.clone();
-            let inputs = inputs.clone();
-            let playback = playback.clone();
-            let shared = shared.clone();
-            let snapshots = snapshots.clone();
-            let rewind = rewind.clone();
-            move || run_drive(boot, inputs, playback, shared, snapshots, rewind)
-        })?,
+        std::thread::Builder::new()
+            .name("gbaroll-playback-drive".to_owned())
+            .spawn({
+                let boot = boot.clone();
+                let inputs = inputs.clone();
+                let playback = playback.clone();
+                let shared = shared.clone();
+                let snapshots = snapshots.clone();
+                let rewind = rewind.clone();
+                let replay_audio = replay_audio.clone();
+                move || {
+                    run_drive(
+                        boot,
+                        inputs,
+                        playback,
+                        shared,
+                        snapshots,
+                        rewind,
+                        replay_audio,
+                    )
+                }
+            })?,
     );
 
     // The prefetch worker: races its own link through the whole stream
@@ -123,8 +151,13 @@ pub fn start(
                 let prefetch_progress = prefetch_progress.clone();
                 let prefetch_cancel = prefetch_cancel.clone();
                 move || {
-                    if let Err(e) = engine::run_prefetch(&boot, &inputs, snapshots, prefetch_progress, prefetch_cancel)
-                    {
+                    if let Err(e) = engine::run_prefetch(
+                        &boot,
+                        &inputs,
+                        snapshots,
+                        prefetch_progress,
+                        prefetch_cancel,
+                    ) {
                         log::error!("replay prefetch worker exited with error: {e:?}");
                     }
                 }
@@ -133,24 +166,32 @@ pub fn start(
 
     // The seek worker: chases seek targets on the playback link.
     threads.push(
-        std::thread::Builder::new().name("gbaroll-playback-seek".to_owned()).spawn({
-            let seek = seek.clone();
-            let playback = playback.clone();
-            let snapshots = snapshots.clone();
-            let rewind = rewind.clone();
-            let shared = shared.clone();
-            move || {
-                engine::run_seek_worker(
-                    &seek,
-                    &playback,
-                    &snapshots,
-                    &rewind,
-                    &mut |tick| shared.position.store(tick, Ordering::Relaxed),
-                    &mut |snap| publish_snapshot(&shared, snap),
-                    &mut || shared.paused.store(false, Ordering::Relaxed),
-                );
-            }
-        })?,
+        std::thread::Builder::new()
+            .name("gbaroll-playback-seek".to_owned())
+            .spawn({
+                let seek = seek.clone();
+                let playback = playback.clone();
+                let snapshots = snapshots.clone();
+                let rewind = rewind.clone();
+                let shared = shared.clone();
+                let replay_audio = replay_audio.clone();
+                move || {
+                    engine::run_seek_worker(
+                        &seek,
+                        &playback,
+                        &snapshots,
+                        &rewind,
+                        engine::SeekCallbacks {
+                            on_progress: &mut |tick| shared.position.store(tick, Ordering::Relaxed),
+                            publish_landing: &mut |snap| publish_snapshot(&shared, snap),
+                            on_resume: &mut || shared.resume(),
+                            on_audio_reset: &mut || {
+                                replay_audio.reset();
+                            },
+                        },
+                    );
+                }
+            })?,
     );
 
     Ok(SessionRuntime {
@@ -175,7 +216,10 @@ pub fn start(
 /// Blit a captured snapshot's framebuffer for the viewed player into
 /// the display surface (emulation-free).
 pub fn publish_snapshot(shared: &SharedSession, snap: &Snapshot) {
-    let view = shared.view_player.load(Ordering::Relaxed).min(snap.framebuffers.len() - 1);
+    let view = shared
+        .view_player
+        .load(Ordering::Relaxed)
+        .min(snap.framebuffers.len() - 1);
     let fb = &snap.framebuffers[view];
     if !fb.is_empty() {
         shared.publish_video(fb);
@@ -189,6 +233,7 @@ fn run_drive(
     shared: Arc<SharedSession>,
     snapshots: SnapshotStore,
     rewind: RewindRing,
+    replay_audio: crate::platform::audio::ReplayAudioQueue,
 ) {
     let pb = match Playback::new(&boot, inputs) {
         Ok(pb) => pb,
@@ -211,16 +256,35 @@ fn run_drive(
     }
 
     let mut pacer = Pacer::new();
+    let mut audio = crate::platform::audio::ReplayAudioProducer::new(replay_audio);
+    let mut was_paused = false;
     loop {
         if shared.quit.load(Ordering::Relaxed) {
             break;
         }
-        if shared.paused.load(Ordering::Relaxed) {
+        if shared.paused.load(Ordering::Acquire) {
+            if !was_paused {
+                audio.reset();
+                was_paused = true;
+            }
             shared.set_fps_target(0.0);
             std::thread::sleep(PAUSED_TICK);
             pacer.reset();
             continue;
         }
+        if was_paused {
+            audio.reset();
+            was_paused = false;
+            pacer.reset();
+        }
+        if shared.take_pace_reset() {
+            pacer.reset();
+        }
+
+        let speed_percent = shared.speed.load(Ordering::Relaxed).max(25);
+        let speed = speed_percent as f32 / 100.0;
+        let fps_target = EXPECTED_FPS * speed;
+        shared.set_fps_target(fps_target);
 
         {
             let mut guard = playback.lock().unwrap();
@@ -231,24 +295,40 @@ fn run_drive(
             }
             pb.step();
             shared.position.store(pb.cursor(), Ordering::Relaxed);
-            match pb.capture() {
-                Ok(snap) => {
-                    if snapshots.snapshot_needed(snap.tick) {
-                        snapshots.push(snap.clone());
-                    }
-                    rewind.insert(snap);
-                }
-                Err(e) => log::warn!("replay: frame capture failed: {e:?}"),
-            }
+
+            // Publish first. Snapshot serialization can then use the
+            // remainder of this frame's pacing budget without delaying
+            // the frame the player is waiting to see.
             let view = shared.view_player.load(Ordering::Relaxed);
             if let Some(buf) = pb.link_mut().video_buffer(view.min(boot.num_players() - 1)) {
                 shared.publish_video(buf);
             }
+
+            audio.publish(
+                pb.link_mut(),
+                view.min(boot.num_players() - 1),
+                speed_percent,
+                fps_target,
+            );
+
+            let tick = pb.cursor();
+            let keyframe_needed = snapshots.snapshot_needed(tick);
+            let rewind_needed = tick % engine::REWIND_CAPTURE_INTERVAL == 0;
+            if keyframe_needed || rewind_needed {
+                match pb.capture() {
+                    Ok(snap) => {
+                        if keyframe_needed {
+                            snapshots.push(snap.clone());
+                        }
+                        if rewind_needed {
+                            rewind.insert(snap);
+                        }
+                    }
+                    Err(e) => log::warn!("replay: frame capture failed: {e:?}"),
+                }
+            }
         }
 
-        let speed = shared.speed.load(Ordering::Relaxed).max(25) as f32 / 100.0;
-        let fps_target = EXPECTED_FPS * speed;
-        shared.set_fps_target(fps_target);
         pacer.pace(fps_target);
     }
 

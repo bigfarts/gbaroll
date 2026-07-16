@@ -26,9 +26,10 @@ when a prediction misses.
   checks your library against the roster and won't let you ready up
   until you have them all. Saves are committed with the ready flag
   (the host is always ready — their save rides the start) and
-  distributed at session start. Drop No-Intro DAT files (Logiqx XML or
-  ClrMamePro) into the DATs folder and the library shows canonical
-  No-Intro names instead of header titles.
+  distributed at session start. The client automatically downloads its
+  GBA game-name database into app-managed config storage; Settings can
+  fetch the latest copy on demand. Known ROMs use canonical No-Intro
+  names, with header titles as a fallback.
 - **Replays**: every netplay session records a roundless
   `gbaroll-replay` (`.gbrr`) file — boot configuration (per-side ROM
   identity + save) plus the confirmed input stream, nothing else. The
@@ -61,6 +62,7 @@ cargo run --release -p gbaroll
 ```
 
 Point the client at the server in Settings (`ws://host:1984`), drop
-`.gba` files into the ROMs directory, pick one on the Play tab, and
-host/join a room. Local sessions (all sides on one machine) and replay
-playback need no server.
+`.gba` files into the ROMs directory, and pick one on the Play tab. From
+the running game, open Link cable and leave the code blank to create a
+room or enter a code to join one. Solo play and replay playback need no
+server.

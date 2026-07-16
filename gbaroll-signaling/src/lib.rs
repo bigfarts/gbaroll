@@ -86,6 +86,8 @@ pub struct PlayerInfo {
     pub ready: bool,
     /// The ROM this player's side runs; other members need a local copy.
     pub rom_crc32: u32,
+    /// Raw cartridge-header title. Clients should resolve `rom_crc32`
+    /// through their own game-name database for presentation.
     pub rom_title: String,
 }
 

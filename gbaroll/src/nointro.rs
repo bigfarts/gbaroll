@@ -10,12 +10,17 @@ use std::path::Path;
 pub const GBA_DAT_URL: &str =
     "https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/no-intro/Nintendo%20-%20Game%20Boy%20Advance.dat";
 
-pub const GBA_DAT_FILENAME: &str = "Nintendo - Game Boy Advance (No-Intro).dat";
+pub const GBA_DAT_FILENAME: &str = "nointro.dat";
 
-/// Download the GBA No-Intro DAT into `dats_dir`, validating that it
+/// The single app-managed DAT beside gbaroll's `config.json`.
+pub fn storage_path() -> std::path::PathBuf {
+    crate::config::config_dir().join(GBA_DAT_FILENAME)
+}
+
+/// Download the GBA No-Intro DAT into internal storage, validating that it
 /// actually parses before committing (temp file + rename, so a failed
 /// download never clobbers a good copy). Returns the number of names.
-pub async fn fetch_gba_dat(dats_dir: std::path::PathBuf) -> anyhow::Result<usize> {
+pub async fn fetch_gba_dat() -> anyhow::Result<usize> {
     let response = reqwest::get(GBA_DAT_URL).await?.error_for_status()?;
     let text = response.text().await?;
 
@@ -23,60 +28,78 @@ pub async fn fetch_gba_dat(dats_dir: std::path::PathBuf) -> anyhow::Result<usize
     index.add_text(&text);
     anyhow::ensure!(!index.is_empty(), "downloaded DAT parsed to zero entries");
 
-    std::fs::create_dir_all(&dats_dir)?;
-    let path = dats_dir.join(GBA_DAT_FILENAME);
-    let tmp = dats_dir.join(format!("{GBA_DAT_FILENAME}.part"));
-    std::fs::write(&tmp, &text)?;
-    std::fs::rename(&tmp, &path)?;
-    log::info!("downloaded {} ({} names) to {}", GBA_DAT_URL, index.len(), path.display());
+    let path = storage_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    replace_gba_dat(&path, &text)?;
+    log::info!(
+        "downloaded {} ({} names) to {}",
+        GBA_DAT_URL,
+        index.len(),
+        path.display()
+    );
     Ok(index.len())
 }
 
-/// CRC32 → canonical game name, merged from every DAT in the dats
-/// directory. Understands both distribution formats No-Intro offers:
-/// Logiqx XML datafiles and ClrMamePro text.
+/// Replace an existing database portably. Windows cannot rename over an
+/// existing file, so retain the previous copy until the new one commits.
+fn replace_gba_dat(path: &Path, text: &str) -> std::io::Result<()> {
+    let filename = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = path.with_file_name(format!("{filename}.part"));
+    let backup = path.with_file_name(format!("{filename}.bak"));
+    std::fs::write(&tmp, text)?;
+
+    // Recover the old copy if a previous process stopped between the two
+    // renames, then begin a fresh replacement.
+    if !path.exists() && backup.exists() {
+        std::fs::rename(&backup, path)?;
+    }
+    if backup.exists() {
+        std::fs::remove_file(&backup)?;
+    }
+    if path.exists() {
+        std::fs::rename(path, &backup)?;
+    }
+    if let Err(error) = std::fs::rename(&tmp, path) {
+        if backup.exists() {
+            let _ = std::fs::rename(&backup, path);
+        }
+        return Err(error);
+    }
+    if backup.exists() {
+        if let Err(error) = std::fs::remove_file(&backup) {
+            log::warn!(
+                "couldn't remove stale DAT backup {}: {error}",
+                backup.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// CRC32 → canonical game name parsed from the managed DAT. Understands
+/// both Logiqx XML and ClrMamePro text.
 #[derive(Default)]
 pub struct DatIndex {
     by_crc32: HashMap<u32, String>,
-    files: usize,
 }
 
 impl DatIndex {
-    /// Load and merge every `*.dat` / `*.xml` under `dats_dir`. The
-    /// first name seen for a CRC wins (overlapping DATs agree anyway).
-    pub fn load_dir(dats_dir: &Path) -> DatIndex {
+    /// Load the app-managed GBA DAT database.
+    pub fn load() -> DatIndex {
+        Self::load_path(&storage_path())
+    }
+
+    fn load_path(path: &Path) -> DatIndex {
         let mut index = DatIndex::default();
-        for entry in walkdir::WalkDir::new(dats_dir)
-            .max_depth(2)
-            .follow_links(true)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            if !entry.file_type().is_file() {
-                continue;
+        match std::fs::read_to_string(path) {
+            Ok(text) => {
+                index.add_text(&text);
+                log::info!("loaded {} name(s) from {}", index.len(), path.display());
             }
-            let path = entry.path();
-            let ext_ok = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| matches!(e.to_ascii_lowercase().as_str(), "dat" | "xml"))
-                .unwrap_or(false);
-            if !ext_ok {
-                continue;
-            }
-            let before = index.by_crc32.len();
-            match std::fs::read_to_string(path) {
-                Ok(text) => {
-                    index.add_text(&text);
-                    index.files += 1;
-                    log::info!(
-                        "loaded {} name(s) from {}",
-                        index.by_crc32.len() - before,
-                        path.display()
-                    );
-                }
-                Err(e) => log::warn!("can't read {}: {e}", path.display()),
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => log::warn!("can't read {}: {error}", path.display()),
         }
         index
     }
@@ -92,11 +115,6 @@ impl DatIndex {
 
     pub fn is_empty(&self) -> bool {
         self.by_crc32.is_empty()
-    }
-
-    /// DAT files loaded, for the settings readout.
-    pub fn files(&self) -> usize {
-        self.files
     }
 
     /// Parse one DAT's text (format auto-detected) into the index.
@@ -172,7 +190,9 @@ impl DatIndex {
         let tokens = clrmamepro_tokens(text);
         let mut i = 0;
         while i < tokens.len() {
-            if (tokens[i] == "game" || tokens[i] == "machine") && tokens.get(i + 1).map(|t| t.as_str()) == Some("(") {
+            if (tokens[i] == "game" || tokens[i] == "machine")
+                && tokens.get(i + 1).map(|t| t.as_str()) == Some("(")
+            {
                 i += 2;
                 let mut depth = 1usize;
                 let mut game_name: Option<String> = None;
@@ -255,16 +275,33 @@ mod tests {
     }
 
     #[test]
+    fn managed_storage_lives_under_config_and_updates_in_place() {
+        assert_eq!(
+            storage_path(),
+            crate::config::config_dir().join(GBA_DAT_FILENAME)
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(GBA_DAT_FILENAME);
+        replace_gba_dat(&path, "old database").unwrap();
+        replace_gba_dat(&path, "latest database").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "latest database");
+        assert!(!path
+            .with_file_name(format!("{GBA_DAT_FILENAME}.bak"))
+            .exists());
+    }
+
+    #[test]
     fn logiqx_xml_names_win_over_header() {
         let rom = fake_rom();
         let crc = crc32fast::hash(&rom);
 
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("roms")).unwrap();
-        std::fs::create_dir(dir.path().join("dats")).unwrap();
         std::fs::write(dir.path().join("roms/test.gba"), &rom).unwrap();
+        let dat_path = dir.path().join("gba.dat");
         std::fs::write(
-            dir.path().join("dats/gba.dat"),
+            &dat_path,
             format!(
                 r#"<?xml version="1.0"?>
 <!DOCTYPE datafile PUBLIC "-//Logiqx//DTD ROM Management Datafile//EN" "http://www.logiqx.com/Dats/datafile.dtd">
@@ -283,11 +320,10 @@ mod tests {
         )
         .unwrap();
 
-        let dats = DatIndex::load_dir(&dir.path().join("dats"));
-        assert_eq!(dats.files(), 1);
-        assert_eq!(dats.lookup(crc), Some("Some Game & Friends (USA)"));
+        let dat = DatIndex::load_path(&dat_path);
+        assert_eq!(dat.lookup(crc), Some("Some Game & Friends (USA)"));
 
-        let library = Library::scan(&dir.path().join("roms"), &dats);
+        let library = Library::scan(&dir.path().join("roms"), &dat);
         assert_eq!(library.roms.len(), 1);
         assert_eq!(library.roms[0].display_name(), "Some Game & Friends (USA)");
         assert_eq!(library.roms[0].title, "HEADERTTL");
@@ -304,7 +340,11 @@ mod tests {
         let mut index = DatIndex::default();
         index.add_text(&text);
         println!("parsed {} names", index.len());
-        assert!(index.len() > 1000, "real DAT parsed to only {} names", index.len());
+        assert!(
+            index.len() > 1000,
+            "real DAT parsed to only {} names",
+            index.len()
+        );
     }
 
     #[test]
@@ -314,15 +354,15 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("roms")).unwrap();
-        std::fs::create_dir(dir.path().join("dats")).unwrap();
         std::fs::write(dir.path().join("roms/test.gba"), &rom).unwrap();
         // A second rom no DAT knows: header fallback.
         let mut other = fake_rom();
         other[0xa0..0xa9].copy_from_slice(b"OTHERTITL");
         other[0x100] = 0x77; // different crc
         std::fs::write(dir.path().join("roms/other.gba"), &other).unwrap();
+        let dat_path = dir.path().join("gba.dat");
         std::fs::write(
-            dir.path().join("dats/gba.dat"),
+            &dat_path,
             format!(
                 "clrmamepro (\n\tname \"Nintendo - Game Boy Advance\"\n)\ngame (\n\tname \"Cool Game (Europe) (En,Fr,De)\"\n\tdescription \"Cool Game (Europe)\"\n\trom ( name \"Cool Game (Europe).gba\" size {} crc {crc:08x} md5 0 )\n)\n",
                 rom.len()
@@ -330,10 +370,10 @@ mod tests {
         )
         .unwrap();
 
-        let dats = DatIndex::load_dir(&dir.path().join("dats"));
-        assert_eq!(dats.lookup(crc), Some("Cool Game (Europe) (En,Fr,De)"));
+        let dat = DatIndex::load_path(&dat_path);
+        assert_eq!(dat.lookup(crc), Some("Cool Game (Europe) (En,Fr,De)"));
 
-        let library = Library::scan(&dir.path().join("roms"), &dats);
+        let library = Library::scan(&dir.path().join("roms"), &dat);
         assert_eq!(library.roms.len(), 2);
         let cool = library.roms.iter().find(|r| r.crc32 == crc).unwrap();
         assert_eq!(cool.display_name(), "Cool Game (Europe) (En,Fr,De)");

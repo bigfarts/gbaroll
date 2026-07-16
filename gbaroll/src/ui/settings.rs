@@ -49,6 +49,7 @@ fn section<'a>(title: &'a str, content: Element<'a, Message>) -> Element<'a, Mes
 /// The label column width, shared by every settings row so controls line
 /// up in one column.
 const LABEL_WIDTH: f32 = 150.0;
+const ACTION_BUTTON_WIDTH: f32 = 136.0;
 
 fn labeled<'a>(label: &'a str, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     row![
@@ -75,7 +76,10 @@ fn dir_row<'a>(label: &'a str, path: &std::path::Path, pick: Message) -> Element
                     },
                     ..Default::default()
                 }),
-            button(text("Change…")).padding([6, 12]).on_press(pick),
+            button(text("Change…"))
+                .padding([6, 12])
+                .width(Length::Fixed(ACTION_BUTTON_WIDTH))
+                .on_press(pick),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center),
@@ -101,19 +105,19 @@ fn bindings_editor(app: &App) -> Element<'_, Message> {
         }
         let capturing = app.settings.capture_target == Some(key);
         chips = chips.push(if capturing {
-            button(text("press a key/button… (Esc cancels)").size(12))
+            button(text("Press a key or button… (Esc cancels)").size(12))
                 .padding([2, 6])
                 .style(button::primary)
                 .on_press(Message::BindingCaptureCancel)
         } else {
-            button(text("+ add").size(12))
+            button(text("+ Add").size(12))
                 .padding([2, 6])
                 .on_press(Message::BindingCaptureStart(key))
         });
         rows = rows.push(labeled(label, chips));
     }
     rows = rows.push(
-        button(text("reset to defaults"))
+        button(text("Reset to defaults"))
             .padding([4, 10])
             .style(button::secondary)
             .on_press(Message::MappingReset),
@@ -136,15 +140,22 @@ pub fn view(app: &App) -> Element<'_, Message> {
     );
 
     let dat_status = if app.dat_downloading {
-        "downloading the GBA No-Intro DAT…".to_string()
+        "Updating game names…".to_string()
     } else if let Some(e) = &app.dat_download_error {
-        format!("download failed: {e}")
-    } else if app.dats.is_empty() {
-        "no names loaded".to_string()
+        format!("Update failed: {e}")
+    } else if app.dat.is_empty() {
+        "Game names unavailable".to_string()
     } else {
-        format!("{} name(s) from {} DAT file(s)", app.dats.len(), app.dats.files())
+        format!("{} game names loaded", app.dat.len())
     };
-    let mut download = button(text("Download").size(13)).padding([6, 12]);
+    let download_label = if app.dat_downloading {
+        "Updating…"
+    } else {
+        "Download latest"
+    };
+    let mut download = button(text(download_label))
+        .padding([6, 12])
+        .width(Length::Fixed(ACTION_BUTTON_WIDTH));
     if !app.dat_downloading {
         download = download.on_press(Message::DownloadGbaDat);
     }
@@ -154,15 +165,20 @@ pub fn view(app: &App) -> Element<'_, Message> {
             dir_row("ROMs", &config.roms_dir, Message::PickRomsDir),
             dir_row("Saves", &config.saves_dir, Message::PickSavesDir),
             dir_row("Replays", &config.replays_dir, Message::PickReplaysDir),
-            dir_row("No-Intro DATs", &config.dats_dir, Message::PickDatsDir),
-            labeled(
-                "Display names",
-                row![text(dat_status).size(13).width(Length::Fill), download]
-                    .spacing(8)
-                    .align_y(iced::Alignment::Center),
-            ),
         ]
         .spacing(10)
+        .into(),
+    );
+
+    let database = section(
+        "Game database",
+        column![
+            text("Proper game names come from the No-Intro database.").size(12),
+            row![text(dat_status).size(13).width(Length::Fill), download]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+        ]
+        .spacing(8)
         .into(),
     );
 
@@ -176,18 +192,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
                     .padding(8)
                     .width(Length::Fill),
             ),
-            labeled(
-                "Input delay",
-                row![
-                    slider(0..=10u32, config.present_delay, Message::PresentDelayChanged)
-                        .width(Length::Fixed(220.0)),
-                    text(format!("{} ticks", config.present_delay)).size(13),
-                ]
-                .spacing(12)
-                .align_y(iced::Alignment::Center),
-            ),
+            text("Rooms are created and joined through this server.").size(12),
         ]
-        .spacing(10)
+        .spacing(6)
         .into(),
     );
 
@@ -209,10 +216,6 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 "Integer scaling",
                 checkbox(config.integer_scaling).on_toggle(Message::IntegerScalingToggled),
             ),
-            labeled(
-                "Netplay stats HUD",
-                checkbox(config.show_hud).on_toggle(Message::ShowHudToggled),
-            ),
         ]
         .spacing(10)
         .into(),
@@ -221,7 +224,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let input_section = section("Input bindings", bindings_editor(app));
 
     let body = scrollable(
-        column![identity, dirs, netplay, av, input_section]
+        column![identity, dirs, database, netplay, av, input_section]
             .spacing(PADDING * 1.5)
             .width(Length::Fill),
     )

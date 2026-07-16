@@ -26,8 +26,17 @@ pub const KEYFRAME_INTERVAL_MIN: u32 = 60;
 /// the interval instead of blowing the budget.
 const KEYFRAME_BUDGET_2P: u32 = 400;
 
-/// Depth of the [`RewindRing`]'s per-tick window behind the playhead.
+/// Depth of the [`RewindRing`]'s sampled window behind the playhead.
 pub const REWIND_FRAMES: u32 = 90;
+
+/// Save a rewind state six times a second instead of on every displayed
+/// frame. Restoring one and simulating at most nine ticks to an exact seek
+/// target is cheap; serializing every core sixty times a second is not.
+pub const REWIND_CAPTURE_INTERVAL: u32 = 10;
+
+/// The keyframe prefetcher runs ahead of playback, but must leave enough CPU
+/// for the real-time link and the UI. It previously ran flat-out.
+const PREFETCH_RATE: f32 = crate::session::EXPECTED_FPS * 4.0;
 
 /// Hard cap on rewind-ring entries for a 2-player link; scaled down for
 /// wider links (their snapshots are proportionally bigger).
@@ -70,7 +79,10 @@ impl SnapshotStore {
         self.entries
             .lock()
             .unwrap()
-            .range((std::ops::Bound::Excluded(lo), std::ops::Bound::Included(tick)))
+            .range((
+                std::ops::Bound::Excluded(lo),
+                std::ops::Bound::Included(tick),
+            ))
             .next()
             .is_none()
     }
@@ -107,7 +119,10 @@ impl SnapshotStore {
         let entries = self.entries.lock().unwrap();
         let below = entries.range(..=target).next_back();
         let above = entries
-            .range((std::ops::Bound::Excluded(target), std::ops::Bound::Unbounded))
+            .range((
+                std::ops::Bound::Excluded(target),
+                std::ops::Bound::Unbounded,
+            ))
             .next();
         [below, above]
             .into_iter()
@@ -117,9 +132,8 @@ impl SnapshotStore {
     }
 }
 
-/// Rolling per-tick snapshot window trailing the playhead: every tick
-/// the playback link runs (normal playback and seek chases alike) is
-/// captured, so short backward steps land on exact snapshots.
+/// Rolling sampled snapshot window trailing the playhead. Short seeks load
+/// the nearest preceding sample and simulate the remaining handful of ticks.
 #[derive(Clone)]
 pub struct RewindRing(Arc<RewindRingInner>);
 
@@ -199,7 +213,10 @@ impl RewindRing {
         let entries = self.0.entries.lock().unwrap();
         let below = entries.range(..=target).next_back();
         let above = entries
-            .range((std::ops::Bound::Excluded(target), std::ops::Bound::Unbounded))
+            .range((
+                std::ops::Bound::Excluded(target),
+                std::ops::Bound::Unbounded,
+            ))
             .next();
         [below, above]
             .into_iter()
@@ -233,7 +250,9 @@ impl BootConfig {
         let rtc = Some(
             self.rtc_unix_micros
                 .map(|us| std::time::UNIX_EPOCH + std::time::Duration::from_micros(us))
-                .unwrap_or_else(|| std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000)),
+                .unwrap_or_else(|| {
+                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000)
+                }),
         );
         let mut link = if self.boots.iter().all(|b| b.is_some()) {
             let sides = self
@@ -272,8 +291,8 @@ impl BootConfig {
 }
 
 /// The playback link plus the recorded input stream and a cursor. The
-/// host wraps it in a mutex — the drive loop, the seek chase, and the
-/// audio pull interleave on that lock.
+/// host wraps it in a mutex shared by the drive loop and seek chase;
+/// audio is published separately by the drive thread.
 pub struct Playback {
     link: mgba_siolink::Link,
     inputs: Arc<Vec<Vec<u32>>>,
@@ -347,28 +366,38 @@ fn capture(link: &mut mgba_siolink::Link, tick: u32) -> Snapshot {
 
 /// Body of the seek worker thread. Sleeps until a [`SeekController`]
 /// request lands, then chases the newest target on the playback link:
-/// load the best snapshot at or before it (rewind ring ∪ keyframe
-/// store), step forward feeding the recorded inputs, capturing every
-/// tick on the way (the ring backfills itself), and publish the landing
-/// frame. Newer requests supersede an in-flight chase at the next tick
-/// boundary.
+/// load the best snapshot at or before it (rewind ring ∪ keyframe store),
+/// step forward feeding the recorded inputs, sample the chase for future
+/// seeks, and always capture the exact landing frame. Newer requests
+/// supersede an in-flight chase at the next tick boundary.
 ///
 /// The link mutex is held for a chase's duration: the drive loop just
-/// waits its turn (it re-paces on wake), and the audio pull uses
-/// `try_lock` so it plays silence rather than stalling. Backward seeks
+/// waits its turn and re-paces on wake. Backward seeks
 /// with no snapshot at or before the target fall back to tick 0 (the
 /// prefetcher stores a boot keyframe immediately, so this is rare).
+pub struct SeekCallbacks<'a> {
+    pub on_progress: &'a mut dyn FnMut(u32),
+    pub publish_landing: &'a mut dyn FnMut(&Snapshot),
+    pub on_resume: &'a mut dyn FnMut(),
+    pub on_audio_reset: &'a mut dyn FnMut(),
+}
+
 pub fn run_seek_worker(
     ctrl: &SeekController,
     playback: &Mutex<Option<Playback>>,
     store: &SnapshotStore,
     rewind: &RewindRing,
-    on_progress: &mut dyn FnMut(u32),
-    publish_landing: &mut dyn FnMut(&Snapshot),
-    on_resume: &mut dyn FnMut(),
+    callbacks: SeekCallbacks<'_>,
 ) {
+    let SeekCallbacks {
+        on_progress,
+        publish_landing,
+        on_resume,
+        on_audio_reset,
+    } = callbacks;
     while ctrl.wait_for_request() {
         ctrl.begin_pass();
+        on_audio_reset();
         'plan: loop {
             let target = ctrl.take_target();
             rewind.set_anchor(target);
@@ -382,10 +411,13 @@ pub fn run_seek_worker(
 
             let cur = pb.cursor();
             let start = if target < cur {
-                let best = [rewind.best_at_or_before(target), store.best_at_or_before(target)]
-                    .into_iter()
-                    .flatten()
-                    .max_by_key(|s| s.tick);
+                let best = [
+                    rewind.best_at_or_before(target),
+                    store.best_at_or_before(target),
+                ]
+                .into_iter()
+                .flatten()
+                .max_by_key(|s| s.tick);
                 match best {
                     Some(snap) => Some(snap),
                     None => break 'plan,
@@ -427,13 +459,23 @@ pub fn run_seek_worker(
                     break;
                 }
                 on_progress(pb.cursor());
+                let tick = pb.cursor();
+                let store_needed = store.snapshot_needed(tick);
+                let rewind_needed = tick % REWIND_CAPTURE_INTERVAL == 0 || tick == target;
+                if !store_needed && !rewind_needed {
+                    continue;
+                }
                 match pb.capture() {
                     Ok(snap) => {
-                        if store.snapshot_needed(snap.tick) {
+                        if store_needed {
                             store.push(snap.clone());
                         }
-                        rewind.insert(snap.clone());
-                        landing = Some(snap);
+                        if rewind_needed {
+                            rewind.insert(snap.clone());
+                        }
+                        if tick == target {
+                            landing = Some(snap);
+                        }
                     }
                     Err(e) => log::warn!("seek: capture failed: {e:?}"),
                 }
@@ -450,6 +492,10 @@ pub fn run_seek_worker(
             }
             break 'plan;
         }
+        // A drive tick can race the beginning of a seek. Reset again at
+        // the landing so no pre-seek frame published during that window
+        // survives into resumed playback.
+        on_audio_reset();
         ctrl.end_pass();
 
         if !ctrl.is_dirty() && ctrl.take_resume() {
@@ -471,6 +517,7 @@ pub fn run_prefetch(
     cancel: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let mut link = config.boot()?;
+    let mut pacer = crate::session::Pacer::new();
 
     // Keyframe at tick 0: the boot state every backward seek bottoms
     // out on.
@@ -486,6 +533,7 @@ pub fn run_prefetch(
             store.push(Arc::new(capture(&mut link, tick)));
         }
         progress.store(tick, Ordering::Relaxed);
+        pacer.pace(PREFETCH_RATE);
     }
 
     Ok(())

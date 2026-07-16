@@ -37,7 +37,7 @@ pub struct Library {
 }
 
 impl Library {
-    pub fn scan(roms_dir: &Path, dats: &DatIndex) -> Library {
+    pub fn scan(roms_dir: &Path, dat: &DatIndex) -> Library {
         let mut roms = Vec::new();
         for entry in walkdir::WalkDir::new(roms_dir)
             .follow_links(true)
@@ -58,7 +58,7 @@ impl Library {
             }
             match load_rom_info(path) {
                 Ok(mut info) => {
-                    info.dat_name = dats.lookup(info.crc32).map(|n| n.to_string());
+                    info.dat_name = dat.lookup(info.crc32).map(|n| n.to_string());
                     roms.push(info);
                 }
                 Err(e) => log::warn!("skipping {}: {e}", path.display()),

@@ -1,6 +1,6 @@
 //! The iced application: tab shell (Play / Replays / Settings) and the
 //! fullscreen session view. Netplay is not a separate flow — a running
-//! solo session hosts/joins a room from its link sidebar, the cable
+//! solo session hosts/joins a room from its unified cable panel, the cable
 //! plugs in when the room starts (runtime swap to netplay), and any
 //! netplay teardown unplugs back to solo.
 
@@ -49,7 +49,9 @@ impl std::fmt::Display for SaveChoice {
             SaveChoice::File(p) => write!(
                 f,
                 "{}",
-                p.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()
+                p.file_name()
+                    .map(|n| n.to_string_lossy())
+                    .unwrap_or_default()
             ),
         }
     }
@@ -112,19 +114,20 @@ pub enum Message {
     // Play tab.
     PlaySearchChanged(String),
     PlayRomSelected(u32),
-    LocalPlayersChanged(usize),
     LocalSaveSelected(SaveChoice),
     LocalClicked,
     RescanRoms,
 
-    // The link sidebar (host/join a room from a running solo session).
-    SessionLinkToggle,
+    // The unified link / lobby / telemetry panel.
+    SessionTogglePanel,
     LinkCodeChanged(String),
-    LinkHostClicked,
+    LinkCreateClicked,
     LinkJoinClicked,
+    LinkCodeCopyClicked(String),
+    LinkCodeCopyReset(String),
     SessionUnplug,
 
-    // Lobby (inside the link modal).
+    // Lobby (inside the unified panel).
     LobbyPoll,
     LobbyReadyToggled(bool),
     LobbyStartClicked,
@@ -134,7 +137,6 @@ pub enum Message {
     SessionFrame,
     SessionInput(crate::platform::input::Event),
     SessionToggleMenu,
-    SessionToggleTelemetry,
     SessionPauseToggled,
     SessionSpeedSelected(SpeedChoice),
     SessionViewPlayerSelected(PlayerChoice),
@@ -147,20 +149,19 @@ pub enum Message {
 
     // Replays tab.
     ReplayWatch(usize),
-    ReplayDelete(usize),
+    ReplayDeleteRequested(usize),
+    ReplayDeleteConfirmed(usize),
+    ReplayDeleteCanceled,
     RescanReplays,
 
     // Settings tab.
     NickChanged(String),
     ServerChanged(String),
-    PresentDelayChanged(u32),
     VolumeChanged(f32),
     IntegerScalingToggled(bool),
-    ShowHudToggled(bool),
     PickRomsDir,
     PickSavesDir,
     PickReplaysDir,
-    PickDatsDir,
     DownloadGbaDat,
     DatDownloaded(Result<usize, String>),
     BindingCaptureStart(MappedKey),
@@ -173,7 +174,7 @@ pub enum Message {
 pub struct App {
     pub config: Config,
     pub library: Library,
-    pub dats: crate::nointro::DatIndex,
+    pub dat: crate::nointro::DatIndex,
     pub dat_downloading: bool,
     pub dat_download_error: Option<String>,
     pub tab: Tab,
@@ -210,17 +211,17 @@ impl App {
         };
         audio_binder.set_volume(config.volume);
 
-        let dats = crate::nointro::DatIndex::load_dir(&config.dats_dir);
-        let library = Library::scan(&config.roms_dir, &dats);
+        let dat = crate::nointro::DatIndex::load();
+        let library = Library::scan(&config.roms_dir, &dat);
         let replays = replays::State::scan(&config.replays_dir);
 
         // First run (no DATs yet): fetch the GBA No-Intro DAT in the
         // background so names appear without any setup.
         let mut startup = Task::none();
         let mut dat_downloading = false;
-        if dats.files() == 0 {
+        if dat.is_empty() {
             dat_downloading = true;
-            startup = download_gba_dat_task(config.dats_dir.clone());
+            startup = download_gba_dat_task();
         }
 
         (
@@ -231,7 +232,7 @@ impl App {
                 lobby: None,
                 session: None,
                 library,
-                dats,
+                dat,
                 dat_downloading,
                 dat_download_error: None,
                 notice: None,
@@ -246,7 +247,15 @@ impl App {
     }
 
     pub fn title(&self) -> String {
-        "gbaroll".to_string()
+        // Surface the running game in the window title / task switcher.
+        let game = self.session.as_ref().and_then(|s| {
+            let crc = s.runtime.descriptor.rom_crc32?;
+            Some(self.library.by_crc32(crc)?.display_name().to_string())
+        });
+        match game {
+            Some(name) => format!("{name} — gbaroll"),
+            None => "gbaroll".to_string(),
+        }
     }
 
     pub fn theme(&self) -> Theme {
@@ -261,7 +270,10 @@ impl App {
             build_frame_stream,
         )];
         if self.lobby.is_some() {
-            subs.push(iced::time::every(std::time::Duration::from_millis(100)).map(|_| Message::LobbyPoll));
+            subs.push(
+                iced::time::every(std::time::Duration::from_millis(100))
+                    .map(|_| Message::LobbyPoll),
+            );
         }
         Subscription::batch(subs)
     }
@@ -283,15 +295,25 @@ impl App {
     }
 
     fn apply_joyflags(&mut self) {
-        let Some(session) = &mut self.session else { return };
+        let Some(session) = &mut self.session else {
+            return;
+        };
         let joyflags = self.config.mapping.to_mgba_keys(&session.held);
-        session.runtime.shared.joyflags.store(joyflags, Ordering::Relaxed);
+        session
+            .runtime
+            .shared
+            .joyflags
+            .store(joyflags, Ordering::Relaxed);
         // Hold-to-fast-forward for local/playback sessions.
         if session.runtime.descriptor.kind != SessionKind::Netplay {
             let speed_up = self.config.mapping.speed_up_held(&session.held);
             if speed_up != session.speed_up_held {
                 session.speed_up_held = speed_up;
-                let speed = if speed_up { 300 } else { session.selected_speed };
+                let speed = if speed_up {
+                    300
+                } else {
+                    session.selected_speed
+                };
                 session.runtime.shared.speed.store(speed, Ordering::Relaxed);
             }
         }
@@ -310,11 +332,10 @@ impl App {
             // ---- play tab ----
             Message::PlaySearchChanged(s) => self.play.search = s,
             Message::PlayRomSelected(crc) => self.play.selected_crc = Some(crc),
-            Message::LocalPlayersChanged(n) => self.play.local_players = n.clamp(1, 4),
             Message::LocalSaveSelected(choice) => self.play.local_save = choice,
             Message::RescanRoms => {
-                self.dats = crate::nointro::DatIndex::load_dir(&self.config.dats_dir);
-                self.library = Library::scan(&self.config.roms_dir, &self.dats);
+                self.dat = crate::nointro::DatIndex::load();
+                self.library = Library::scan(&self.config.roms_dir, &self.dat);
                 self.play.selected_crc = self
                     .play
                     .selected_crc
@@ -326,30 +347,60 @@ impl App {
                 }
             }
 
-            // ---- link sidebar ----
-            Message::SessionLinkToggle => {
+            // ---- link / lobby / telemetry panel ----
+            Message::SessionTogglePanel => {
                 if let Some(session) = &mut self.session {
-                    session.link_open = !session.link_open;
+                    session.panel_open = !session.panel_open;
                 }
             }
             Message::LinkCodeChanged(code) => {
                 if let Some(session) = &mut self.session {
-                    session.link_code = code.to_ascii_uppercase();
+                    session.link_code = sanitize_room_code(&code);
+                    session.link_notice = None;
+                    session.copied_link_code = None;
                 }
             }
-            Message::LinkHostClicked => self.start_lobby(crate::net::lobby::LobbyMode::Create),
+            Message::LinkCreateClicked => {
+                self.start_lobby(crate::net::lobby::LobbyMode::Create);
+            }
             Message::LinkJoinClicked => {
                 let code = self
                     .session
                     .as_ref()
                     .map(|s| gbaroll_signaling::normalize_room_code(&s.link_code))
                     .unwrap_or_default();
-                if code.is_empty() {
-                    if let Some(session) = &mut self.session {
-                        session.link_notice = Some("enter a room code to join".to_string());
-                    }
-                } else {
+                // The join button only enables on a full code; this guard
+                // is for programmatic paths.
+                if code.len() == gbaroll_signaling::ROOM_CODE_LEN {
                     self.start_lobby(crate::net::lobby::LobbyMode::Join { code });
+                } else if let Some(session) = &mut self.session {
+                    session.link_notice = Some(format!(
+                        "Room codes are {} characters.",
+                        gbaroll_signaling::ROOM_CODE_LEN
+                    ));
+                }
+            }
+            Message::LinkCodeCopyClicked(code) => {
+                if let Some(session) = &mut self.session {
+                    session.copied_link_code = Some(code.clone());
+                }
+                let reset_code = code.clone();
+                return Task::batch([
+                    iced::clipboard::write(code),
+                    Task::perform(
+                        async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
+                            reset_code
+                        },
+                        Message::LinkCodeCopyReset,
+                    ),
+                ]);
+            }
+            Message::LinkCodeCopyReset(code) => {
+                if let Some(session) = &mut self.session {
+                    if session.copied_link_code.as_deref() == Some(code.as_str()) {
+                        session.copied_link_code = None;
+                    }
                 }
             }
             Message::SessionUnplug => {
@@ -363,20 +414,23 @@ impl App {
             Message::LobbyReadyToggled(ready) => {
                 if let Some(lobby) = &mut self.lobby {
                     lobby.my_ready = ready;
+                    lobby.status = None;
                     lobby.handle.send(LobbyCommand::SetReady { ready });
                 }
             }
             Message::LobbyStartClicked => {
-                if let Some(lobby) = &self.lobby {
+                if let Some(lobby) = &mut self.lobby {
+                    lobby.starting = true;
+                    lobby.status = Some("Starting the room…".to_string());
                     lobby.handle.send(LobbyCommand::Start);
                 }
             }
             Message::LobbyLeaveClicked => {
-                self.lobby = None; // Drop sends Leave.
-                // If the start already froze the machine for its capture,
-                // let it run again.
+                // Drop sends Leave. If start already froze the machine
+                // for its capture, resume it on a fresh pacing deadline.
+                self.lobby = None;
                 if let Some(session) = &self.session {
-                    session.runtime.shared.paused.store(false, Ordering::Relaxed);
+                    session.runtime.shared.resume();
                 }
             }
 
@@ -408,14 +462,9 @@ impl App {
                     }
                 }
             }
-            Message::SessionToggleTelemetry => {
-                if let Some(session) = &mut self.session {
-                    session.telemetry_open = !session.telemetry_open;
-                }
-            }
             Message::SessionPauseToggled => {
                 if let Some(session) = &mut self.session {
-                    if session.runtime.descriptor.kind != SessionKind::Netplay {
+                    if session.runtime.descriptor.kind == SessionKind::Playback {
                         session.toggle_pause();
                     }
                 }
@@ -430,7 +479,11 @@ impl App {
             }
             Message::SessionViewPlayerSelected(choice) => {
                 if let Some(session) = &self.session {
-                    session.runtime.shared.view_player.store(choice.idx, Ordering::Relaxed);
+                    session
+                        .runtime
+                        .shared
+                        .view_player
+                        .store(choice.idx, Ordering::Relaxed);
                 }
             }
             Message::SessionPresentDelayChanged(delay) => {
@@ -471,7 +524,13 @@ impl App {
                     self.notice(format!("couldn't play replay: {e:#}"));
                 }
             }
-            Message::ReplayDelete(index) => {
+            // Deleting a recording is irreversible, so it takes two
+            // clicks: arm on the row, then confirm in place.
+            Message::ReplayDeleteRequested(index) => {
+                self.replays.pending_delete = Some(index);
+            }
+            Message::ReplayDeleteCanceled => self.replays.pending_delete = None,
+            Message::ReplayDeleteConfirmed(index) => {
                 if let Some(entry) = self.replays.entries.get(index) {
                     if let Err(e) = std::fs::remove_file(&entry.path) {
                         self.notice(format!("couldn't delete replay: {e}"));
@@ -489,10 +548,6 @@ impl App {
                 self.config.signaling_server = url;
                 self.config.save();
             }
-            Message::PresentDelayChanged(delay) => {
-                self.config.present_delay = delay.min(10);
-                self.config.save();
-            }
             Message::VolumeChanged(v) => {
                 self.config.volume = v.clamp(0.0, 1.0);
                 self.config.save();
@@ -502,30 +557,21 @@ impl App {
                 self.config.integer_scaling = v;
                 self.config.save();
             }
-            Message::ShowHudToggled(v) => {
-                self.config.show_hud = v;
-                self.config.save();
-            }
             Message::PickRomsDir => {
-                if let Some(dir) = rfd::FileDialog::new().set_directory(&self.config.roms_dir).pick_folder() {
+                if let Some(dir) = rfd::FileDialog::new()
+                    .set_directory(&self.config.roms_dir)
+                    .pick_folder()
+                {
                     self.config.roms_dir = dir;
                     self.config.save();
-                    self.library = Library::scan(&self.config.roms_dir, &self.dats);
-                }
-            }
-            Message::PickDatsDir => {
-                if let Some(dir) = rfd::FileDialog::new().set_directory(&self.config.dats_dir).pick_folder() {
-                    self.config.dats_dir = dir;
-                    self.config.save();
-                    self.dats = crate::nointro::DatIndex::load_dir(&self.config.dats_dir);
-                    self.library = Library::scan(&self.config.roms_dir, &self.dats);
+                    self.library = Library::scan(&self.config.roms_dir, &self.dat);
                 }
             }
             Message::DownloadGbaDat => {
                 if !self.dat_downloading {
                     self.dat_downloading = true;
                     self.dat_download_error = None;
-                    return download_gba_dat_task(self.config.dats_dir.clone());
+                    return download_gba_dat_task();
                 }
             }
             Message::DatDownloaded(result) => {
@@ -533,8 +579,8 @@ impl App {
                 match result {
                     Ok(_) => {
                         self.dat_download_error = None;
-                        self.dats = crate::nointro::DatIndex::load_dir(&self.config.dats_dir);
-                        self.library = Library::scan(&self.config.roms_dir, &self.dats);
+                        self.dat = crate::nointro::DatIndex::load();
+                        self.library = Library::scan(&self.config.roms_dir, &self.dat);
                     }
                     Err(e) => {
                         log::warn!("DAT download failed: {e}");
@@ -543,7 +589,10 @@ impl App {
                 }
             }
             Message::PickSavesDir => {
-                if let Some(dir) = rfd::FileDialog::new().set_directory(&self.config.saves_dir).pick_folder() {
+                if let Some(dir) = rfd::FileDialog::new()
+                    .set_directory(&self.config.saves_dir)
+                    .pick_folder()
+                {
                     self.config.saves_dir = dir;
                     self.config.save();
                 }
@@ -589,30 +638,48 @@ impl App {
             return session_view::view(session, self.lobby.as_ref(), &self.library, &self.config);
         }
 
-        let tab_button = |label: &'static str, tab: Tab| {
-            button(text(label))
-                .padding([6, 14])
-                .style(if self.tab == tab {
-                    button::primary
-                } else {
-                    button::text
-                })
-                .on_press(Message::TabSelected(tab))
+        let tab_button = |label: &'static str, icon: icons::Icon, tab: Tab| {
+            button(
+                row![icons::icon(icon, 15.0), text(label).size(14)]
+                    .spacing(7)
+                    .align_y(iced::Alignment::Center),
+            )
+            .padding([8, 14])
+            .style(if self.tab == tab {
+                button::primary
+            } else {
+                button::text
+            })
+            .on_press(Message::TabSelected(tab))
         };
 
         let top_bar = container(
             row![
-                text("gbaroll").size(22),
-                iced::widget::Space::new().width(Length::Fixed(16.0)),
-                tab_button("Play", Tab::Play),
-                tab_button("Replays", Tab::Replays),
-                tab_button("Settings", Tab::Settings),
+                column![
+                    text("gbaroll").size(22),
+                    text("GBA link play, without the cable").size(11),
+                ]
+                .spacing(1),
+                iced::widget::Space::new().width(Length::Fill),
+                tab_button("Play", icons::Icon::Gamepad2, Tab::Play),
+                tab_button("Replays", icons::Icon::Film, Tab::Replays),
+                tab_button("Settings", icons::Icon::Settings, Tab::Settings),
             ]
-            .spacing(6)
+            .spacing(8)
             .align_y(iced::Alignment::Center),
         )
-        .padding(PADDING)
-        .width(Length::Fill);
+        .padding([10, 14])
+        .width(Length::Fill)
+        .style(|theme: &Theme| container::Style {
+            background: Some(iced::Background::Color(
+                theme.extended_palette().background.weak.color,
+            )),
+            border: iced::Border {
+                width: 0.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
 
         let mut layers = column![top_bar];
 
@@ -620,16 +687,22 @@ impl App {
             layers = layers.push(
                 container(
                     row![
-                        text(notice.clone()),
+                        icons::icon(icons::Icon::CircleAlert, 16.0),
+                        text(notice.clone()).size(13),
                         iced::widget::Space::new().width(Length::Fill),
-                        button(text("dismiss")).style(button::text).on_press(Message::DismissNotice),
+                        button(text("Dismiss").size(12))
+                            .style(button::text)
+                            .on_press(Message::DismissNotice),
                     ]
+                    .spacing(8)
                     .align_y(iced::Alignment::Center),
                 )
-                .padding(PADDING)
+                .padding([8, 14])
                 .width(Length::Fill)
                 .style(|theme: &Theme| container::Style {
-                    background: Some(iced::Background::Color(theme.extended_palette().danger.weak.color)),
+                    background: Some(iced::Background::Color(
+                        theme.extended_palette().danger.weak.color,
+                    )),
                     text_color: Some(theme.extended_palette().danger.weak.text),
                     ..Default::default()
                 }),
@@ -643,21 +716,30 @@ impl App {
         };
 
         layers
-            .push(container(body).padding(PADDING * 1.5).width(Length::Fill).height(Length::Fill))
+            .push(
+                container(body)
+                    .padding(PADDING * 1.5)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
             .into()
     }
 
     fn selected_rom(&self) -> Option<&crate::library::RomInfo> {
-        self.play.selected_crc.and_then(|crc| self.library.by_crc32(crc))
+        self.play
+            .selected_crc
+            .and_then(|crc| self.library.by_crc32(crc))
     }
 
-    /// Open a room from the running solo session's sidebar. The game
+    /// Open a room from the running solo session's cable panel. The game
     /// keeps running; the cable plugs in when the room starts.
     fn start_lobby(&mut self, mode: crate::net::lobby::LobbyMode) {
         if self.lobby.is_some() {
             return;
         }
-        let Some(session) = &mut self.session else { return };
+        let Some(session) = &mut self.session else {
+            return;
+        };
         let rom = session
             .runtime
             .descriptor
@@ -671,22 +753,27 @@ impl App {
             server_url: self.config.signaling_server.clone(),
             nick: self.config.nick.clone(),
             rom_crc32: rom.crc32,
-            rom_title: rom.display_name().to_string(),
+            // The wire carries stable cartridge metadata. Every client
+            // resolves the CRC32 through its own DAT-backed library.
+            rom_title: rom.title.clone(),
             mode,
         });
         self.lobby = Some(lobby::State::new(handle));
         session.link_notice = None;
-        session.link_open = true;
+        session.copied_link_code = None;
+        session.panel_open = true;
     }
 
     fn start_local(&mut self) -> anyhow::Result<()> {
-        let rom = self.selected_rom().ok_or_else(|| anyhow::anyhow!("pick a ROM first"))?;
+        let rom = self
+            .selected_rom()
+            .ok_or_else(|| anyhow::anyhow!("pick a ROM first"))?;
         let rom_crc32 = rom.crc32;
         let bytes = crate::library::read_rom(rom)?;
         let save = self.play.local_save.read()?;
         let runtime = crate::session::local::start(
             crate::session::local::LocalArgs {
-                roms: vec![bytes; self.play.local_players],
+                rom: bytes,
                 rom_crc32,
                 save,
             },
@@ -724,20 +811,40 @@ impl App {
         let Some(lobby) = &mut self.lobby else { return };
         let mut fatal: Option<String> = None;
         let mut bundle = None;
-        while let Ok(event) = lobby.handle.events.try_recv() {
+        loop {
+            let event = match lobby.handle.events.try_recv() {
+                Ok(event) => event,
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    fatal = Some("Lobby connection closed unexpectedly.".to_string());
+                    break;
+                }
+            };
             match event {
-                LobbyEvent::Joined { code } => lobby.code = Some(code),
+                LobbyEvent::Joined { code } => {
+                    lobby.code = Some(code);
+                    lobby.status = None;
+                }
                 LobbyEvent::Roster { players, your_idx } => {
                     lobby.players = players;
                     lobby.my_idx = your_idx;
                     // Occupancy changes reset ready state server-side;
                     // mirror what the server reports for us.
-                    lobby.my_ready = lobby.players.get(your_idx).map(|p| p.ready).unwrap_or(false);
+                    lobby.my_ready = lobby
+                        .players
+                        .get(your_idx)
+                        .map(|p| p.ready)
+                        .unwrap_or(false);
+                    if !lobby.starting {
+                        lobby.status = None;
+                    }
                 }
                 LobbyEvent::Error(message) => {
+                    lobby.starting = false;
                     lobby.status = Some(message);
                 }
                 LobbyEvent::Starting => {
+                    lobby.starting = true;
                     // The cable is being plugged in: freeze the machine
                     // and ship its capture (self.session is a disjoint
                     // field, so borrowing it here is fine).
@@ -750,6 +857,7 @@ impl App {
                     }
                 }
                 LobbyEvent::Connecting(message) => {
+                    lobby.starting = true;
                     lobby.status = Some(message);
                 }
                 LobbyEvent::Fatal(message) => {
@@ -776,13 +884,13 @@ impl App {
     }
 
     /// A lobby or plug-in failure: let the (possibly frozen) game run
-    /// again and surface the reason in the sidebar.
+    /// again and surface the reason in the cable panel.
     fn link_failed(&mut self, message: String) {
         log::warn!("{message}");
         if let Some(session) = &mut self.session {
-            session.runtime.shared.paused.store(false, Ordering::Relaxed);
+            session.runtime.shared.resume();
             session.link_notice = Some(message);
-            session.link_open = true;
+            session.panel_open = true;
         } else {
             self.notice(message);
         }
@@ -824,16 +932,18 @@ impl App {
         )?;
         session.swap_runtime(runtime);
         session.link_notice = None;
-        session.link_open = true;
+        session.panel_open = true;
         self.apply_joyflags();
         Ok(())
     }
 
     /// The cable unplugs: swap the finished netplay runtime for a solo
-    /// continuation of the local machine, and note why in the sidebar.
+    /// continuation of the local machine, and note why in the cable panel.
     fn unplug_continue(&mut self, end: &crate::session::SessionEnd) {
         use crate::session::SessionEnd;
-        let Some(session) = &mut self.session else { return };
+        let Some(session) = &mut self.session else {
+            return;
+        };
         let Some(handoff) = session.runtime.shared.handoff.lock().unwrap().take() else {
             // No continuation material (the capture failed): leave the
             // end overlay to say what happened.
@@ -851,17 +961,24 @@ impl App {
         let reason = match end {
             SessionEnd::Unplugged => "Unplugged.".to_string(),
             SessionEnd::PeerQuit { player } => format!("{} unplugged.", nick_of(*player)),
-            SessionEnd::PeerDisconnected { player } => format!("Connection to {} lost.", nick_of(*player)),
+            SessionEnd::PeerDisconnected { player } => {
+                format!("Connection to {} lost.", nick_of(*player))
+            }
             SessionEnd::Desync { tick } => format!("Desync at tick {tick} — cable unplugged."),
             _ => "Unplugged.".to_string(),
         };
         let rom_crc32 = session.runtime.descriptor.rom_crc32.unwrap_or_default();
         session.runtime.release_audio();
-        match crate::session::local::resume(handoff, rom_crc32, &self.audio_binder, self.frame_notify.clone()) {
+        match crate::session::local::resume(
+            handoff,
+            rom_crc32,
+            &self.audio_binder,
+            self.frame_notify.clone(),
+        ) {
             Ok(runtime) => {
                 session.swap_runtime(runtime);
                 session.link_notice = Some(reason);
-                session.link_open = true;
+                session.panel_open = true;
                 self.apply_joyflags();
                 // The netplay session recorded a replay on the way out.
                 self.replays = replays::State::scan(&self.config.replays_dir);
@@ -896,7 +1013,6 @@ impl App {
             crate::session::playback::PlaybackArgs {
                 replay,
                 roms,
-                path: entry.path.clone(),
             },
             &self.audio_binder,
             self.frame_notify.clone(),
@@ -906,8 +1022,20 @@ impl App {
     }
 }
 
-fn download_gba_dat_task(dats_dir: std::path::PathBuf) -> Task<Message> {
-    Task::perform(crate::nointro::fetch_gba_dat(dats_dir), |result| {
+/// Keep room-code entry aligned with the server's six-character,
+/// ambiguity-free alphabet. This also makes pasted codes with spaces or
+/// punctuation behave like users expect.
+fn sanitize_room_code(input: &str) -> String {
+    input
+        .chars()
+        .flat_map(char::to_uppercase)
+        .filter(|c| c.is_ascii() && gbaroll_signaling::ROOM_CODE_ALPHABET.contains(&(*c as u8)))
+        .take(gbaroll_signaling::ROOM_CODE_LEN)
+        .collect()
+}
+
+fn download_gba_dat_task() -> Task<Message> {
+    Task::perform(crate::nointro::fetch_gba_dat(), |result| {
         Message::DatDownloaded(result.map_err(|e| format!("{e:#}")))
     })
 }
@@ -936,4 +1064,16 @@ fn build_frame_stream(tag: &FrameTag) -> impl futures::Stream<Item = Message> {
 pub fn format_ticks(ticks: u32) -> String {
     let seconds = (ticks as f32 / crate::session::EXPECTED_FPS) as u32;
     format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_room_code;
+
+    #[test]
+    fn room_code_entry_is_normalized_and_bounded() {
+        assert_eq!(sanitize_room_code(" ab-cd ef "), "ABCDEF");
+        assert_eq!(sanitize_room_code("abcde-fgh"), "ABCDEF");
+        assert_eq!(sanitize_room_code("i1lo0abc"), "ABC");
+    }
 }

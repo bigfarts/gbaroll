@@ -31,31 +31,22 @@ pub const UNPLUG_QUEUE_LENGTH: usize = 180;
 /// Sleep quantum while stalled or paused.
 pub const PAUSED_TICK: std::time::Duration = std::time::Duration::from_millis(10);
 
-/// Uniform access to the live link for off-thread readout (audio), for
+/// Uniform access to a live link for off-thread audio readout, for
 /// sessions driven through the rollback engine (which owns its link) and
-/// ones we drive directly.
+/// ones we drive directly. Replay audio is instead published by its
+/// drive thread into a dedicated PCM queue.
 #[derive(Clone)]
 pub enum LinkAccess {
     Handle(mgba_siolink::session::LinkHandle),
     Shared(Arc<Mutex<mgba_siolink::Link>>),
-    /// Playback's link, behind a try-lock: a seek chase can hold the
-    /// mutex for a while, and the audio callback would rather play
-    /// silence than stall.
-    Playback(playback::engine::SharedPlayback),
 }
 
 impl LinkAccess {
-    /// Run `f` against the live link. `None` means the link is
-    /// unavailable right now (still booting, or contended by a seek
-    /// chase) — callers should treat it as silence/skip.
+    /// Run `f` against the live link.
     pub fn with_link<R>(&self, f: impl FnOnce(&mut mgba_siolink::Link) -> R) -> Option<R> {
         match self {
             LinkAccess::Handle(h) => Some(h.with_link(f)),
             LinkAccess::Shared(l) => Some(f(&mut l.lock().unwrap())),
-            LinkAccess::Playback(p) => match p.try_lock() {
-                Ok(mut guard) => guard.as_mut().map(|pb| f(pb.link_mut())),
-                Err(_) => None,
-            },
         }
     }
 }
@@ -66,9 +57,15 @@ pub enum SessionEnd {
     /// The local player pulled the cable: the netplay session ends but the
     /// local machine continues solo (see [`SharedSession::handoff`]).
     Unplugged,
-    PeerQuit { player: usize },
-    PeerDisconnected { player: usize },
-    Desync { tick: u32 },
+    PeerQuit {
+        player: usize,
+    },
+    PeerDisconnected {
+        player: usize,
+    },
+    Desync {
+        tick: u32,
+    },
     Error(String),
 }
 
@@ -143,6 +140,11 @@ pub struct SharedSession {
     pub present_delay: AtomicU32,
     /// Local/playback: pause flag.
     pub paused: AtomicBool,
+    /// Local/playback: resume must also discard the old pacing deadline.
+    /// This is separate from `paused` because a short pause can begin and
+    /// end between two drive-loop iterations; in that case the loop never
+    /// observes `paused == true` and cannot reset its pacer on its own.
+    pace_reset_requested: AtomicBool,
     /// Playback: speed percent (100 = 1x).
     pub speed: AtomicU32,
     /// Playback: current tick / total ticks.
@@ -176,6 +178,7 @@ impl SharedSession {
             view_player: AtomicUsize::new(0),
             present_delay: AtomicU32::new(present_delay),
             paused: AtomicBool::new(false),
+            pace_reset_requested: AtomicBool::new(false),
             speed: AtomicU32::new(100),
             position: AtomicU32::new(0),
             total_ticks: AtomicU32::new(0),
@@ -190,6 +193,19 @@ impl SharedSession {
 
     pub fn set_fps_target(&self, fps: f32) {
         self.fps_target.store(fps.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Resume a locally paced session without trying to make up time spent
+    /// paused. The reset request is published before the pause flag clears,
+    /// so a drive loop that observes the resume also observes the reset.
+    pub fn resume(&self) {
+        self.pace_reset_requested.store(true, Ordering::Relaxed);
+        self.paused.store(false, Ordering::Release);
+        self.frame_notify.notify_one();
+    }
+
+    pub(crate) fn take_pace_reset(&self) -> bool {
+        self.pace_reset_requested.swap(false, Ordering::Relaxed)
     }
 
     /// Publish the presented core's raw BGR555 frame and wake the UI.
@@ -230,7 +246,6 @@ pub struct SessionDescriptor {
     pub local_player: usize,
     pub nicks: Vec<String>,
     pub room_code: Option<String>,
-    pub replay_path: Option<std::path::PathBuf>,
     /// The local player's ROM identity, for opening a lobby from a
     /// running session (`None` for playback).
     pub rom_crc32: Option<u32>,
@@ -306,14 +321,6 @@ impl Pacer {
     }
 }
 
-/// Point every core's frameskip at `view` (rendering is invisible to the
-/// simulation, so this is rollback-safe).
-pub fn apply_view_frameskip(link: &mut mgba_siolink::Link, view: usize) {
-    for i in 0..link.num_players() {
-        link.set_frameskip(i, if i == view { 0 } else { i32::MAX });
-    }
-}
-
 /// Deepen every core's audio buffer past mgba's 2048 default so servo
 /// regulation has room, and drop anything buffered during boot.
 pub fn prepare_audio_buffers(link: &mut mgba_siolink::Link) {
@@ -321,5 +328,22 @@ pub fn prepare_audio_buffers(link: &mut mgba_siolink::Link) {
         let mut core = link.core_mut(i);
         core.set_audio_buffer_size(16384);
         core.audio_buffer().clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resume_requests_one_pacer_reset() {
+        let shared = SharedSession::new(0, Arc::new(tokio::sync::Notify::new()));
+        shared.paused.store(true, Ordering::Relaxed);
+
+        shared.resume();
+
+        assert!(!shared.paused.load(Ordering::Acquire));
+        assert!(shared.take_pace_reset());
+        assert!(!shared.take_pace_reset());
     }
 }

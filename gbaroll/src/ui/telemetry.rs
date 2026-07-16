@@ -1,6 +1,6 @@
-//! The link telemetry panel — ported from tango's match-settings popover
-//! and adapted for 2–4 clients. A bottom-right overlay: a collapsed
-//! signal chip that expands into a card of sparklines. The clock metrics
+//! The unified cable panel — room setup and lobby while offline, then
+//! telemetry and disconnect controls while linked. It collapses to one
+//! top-right status chip. The clock metrics
 //! (TPS, skew, lead, rollback depth) are one shared reading for the whole
 //! link — the engine's skew/queue are already worst-case over every
 //! remote — while ping is per-peer, one row each, so the card grows with
@@ -21,6 +21,7 @@ use crate::session::Stats;
 pub const HISTORY_LEN: usize = 180;
 
 const PANEL_W: f32 = 244.0;
+const LINK_PANEL_W: f32 = 360.0;
 const VALUE_W: f32 = 58.0;
 const SPARK_H: f32 = 24.0;
 
@@ -247,20 +248,58 @@ fn signal_icon(skew: i32) -> Icon {
     }
 }
 
-/// The bottom-right telemetry overlay: collapsed chip or expanded card.
-pub fn overlay<'a>(
-    history: &'a VecDeque<MetricSample>,
-    latest: &'a Stats,
-    present_delay: u32,
-    expanded: bool,
-) -> Element<'a, Message> {
-    let content: Element<'a, Message> = if expanded {
-        expanded_card(history, latest, present_delay)
-    } else {
-        collapsed_chip(latest)
+/// Content modes for the one cable-status control.
+pub enum Panel<'a> {
+    Link {
+        icon: Icon,
+        label: String,
+        title: String,
+        body: Element<'a, Message>,
+        room_code: Option<&'a str>,
+        code_copied: bool,
+    },
+    Connected {
+        history: &'a VecDeque<MetricSample>,
+        latest: &'a Stats,
+        present_delay: u32,
+        room_code: Option<&'a str>,
+        code_copied: bool,
+    },
+}
+
+/// The top-right cable overlay: collapsed status chip or expanded panel.
+pub fn overlay(panel: Panel<'_>, expanded: bool) -> Element<'_, Message> {
+    let content = match panel {
+        Panel::Link {
+            icon,
+            label,
+            title,
+            body,
+            room_code,
+            code_copied,
+        } => {
+            if expanded {
+                link_card(title, body, room_code, code_copied)
+            } else {
+                action_chip(icon, label)
+            }
+        }
+        Panel::Connected {
+            history,
+            latest,
+            present_delay,
+            room_code,
+            code_copied,
+        } => {
+            if expanded {
+                expanded_card(history, latest, present_delay, room_code, code_copied)
+            } else {
+                collapsed_chip(latest)
+            }
+        }
     };
-    // Top-right: the header sits top-left and the transport bar owns the
-    // bottom, so this corner is clear of both.
+    // Keep status and controls in the same predictable corner in every
+    // cable state.
     container(content)
         .width(Length::Fill)
         .height(Length::Fill)
@@ -268,6 +307,75 @@ pub fn overlay<'a>(
         .align_y(iced::alignment::Vertical::Top)
         .padding(12)
         .into()
+}
+
+fn action_chip(icon: Icon, label: String) -> Element<'static, Message> {
+    button(
+        row![icons::icon(icon, 16.0), text(label).size(13)]
+            .spacing(7)
+            .align_y(iced::Alignment::Center),
+    )
+    .padding([6, 10])
+    .style(button::secondary)
+    .on_press(Message::SessionTogglePanel)
+    .into()
+}
+
+fn link_card<'a>(
+    title: String,
+    body: Element<'a, Message>,
+    room_code: Option<&str>,
+    code_copied: bool,
+) -> Element<'a, Message> {
+    let head = row![
+        text(title).size(14).width(Length::Fill),
+        button(icons::icon(Icon::ChevronUp, 16.0))
+            .padding([2, 6])
+            .style(button::text)
+            .on_press(Message::SessionTogglePanel),
+    ]
+    .align_y(iced::Alignment::Center);
+
+    let mut content = column![head].spacing(12).width(Length::Fixed(LINK_PANEL_W));
+    if let Some(code) = room_code {
+        content = content.push(link_code_button(code, code_copied));
+    }
+    panel_container(content.push(body).into())
+}
+
+/// A deliberately button-shaped room code: its label explains what the
+/// value is, and the trailing affordance explains what clicking does.
+pub fn link_code_button(code: &str, copied: bool) -> Element<'static, Message> {
+    let (icon, action) = if copied {
+        (Icon::Check, "Copied")
+    } else {
+        (Icon::Copy, "Click to copy")
+    };
+    button(
+        row![
+            column![
+                text("LINK CODE").size(10),
+                text(code.to_string())
+                    .size(18)
+                    .font(iced::Font::MONOSPACE),
+            ]
+            .spacing(1)
+            .width(Length::Fill),
+            icons::icon(icon, 14.0),
+            text(action).size(12),
+        ]
+        .spacing(7)
+        .align_y(iced::Alignment::Center),
+    )
+    .padding([8, 10])
+    .width(Length::Fill)
+    .style(if copied {
+        button::primary
+    } else {
+        button::secondary
+    })
+    .on_press(Message::LinkCodeCopyClicked(code.to_string()))
+    .into()
 }
 
 fn collapsed_chip(latest: &Stats) -> Element<'_, Message> {
@@ -286,7 +394,7 @@ fn collapsed_chip(latest: &Stats) -> Element<'_, Message> {
         base.text_color = tone.color(theme);
         base
     })
-    .on_press(Message::SessionToggleTelemetry)
+    .on_press(Message::SessionTogglePanel)
     .into()
 }
 
@@ -294,6 +402,8 @@ fn expanded_card<'a>(
     history: &'a VecDeque<MetricSample>,
     latest: &'a Stats,
     present_delay: u32,
+    room_code: Option<&str>,
+    code_copied: bool,
 ) -> Element<'a, Message> {
     let target = latest.fps_target;
 
@@ -302,7 +412,7 @@ fn expanded_card<'a>(
         button(icons::icon(Icon::ChevronUp, 16.0))
             .padding([2, 6])
             .style(button::text)
-            .on_press(Message::SessionToggleTelemetry),
+            .on_press(Message::SessionTogglePanel),
     ]
     .align_y(iced::Alignment::Center);
 
@@ -343,7 +453,11 @@ fn expanded_card<'a>(
         |s| (format!("{}", s.depth), tone_for_abs(s.depth as i32, 2, 5)),
     );
 
-    let mut cards = column![head, tps, skew, lead, depth].spacing(8).width(Length::Fixed(PANEL_W));
+    let mut cards = column![head].spacing(8).width(Length::Fixed(PANEL_W));
+    if let Some(code) = room_code {
+        cards = cards.push(link_code_button(code, code_copied));
+    }
+    cards = cards.push(tps).push(skew).push(lead).push(depth);
 
     // One ping card per peer, captioned with the peer's nick — this is
     // what makes the panel scale with the number of clients.
@@ -396,7 +510,27 @@ fn expanded_card<'a>(
 
     cards = cards.push(delay);
 
-    container(cards)
+    cards = cards.push(
+        column![
+            button(
+                row![icons::icon(Icon::Unplug, 14.0), text("Disconnect cable")]
+                    .spacing(7)
+                    .align_y(iced::Alignment::Center),
+            )
+            .padding([7, 12])
+            .width(Length::Fill)
+            .style(button::danger)
+            .on_press(Message::SessionUnplug),
+            text("Your local game keeps running after disconnecting.").size(11),
+        ]
+        .spacing(6),
+    );
+
+    panel_container(cards.into())
+}
+
+fn panel_container(content: Element<'_, Message>) -> Element<'_, Message> {
+    container(content)
         .padding(12)
         .style(|theme: &Theme| container::Style {
             background: Some(iced::Background::Color(theme.extended_palette().background.base.color)),

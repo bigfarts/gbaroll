@@ -16,13 +16,19 @@ pub struct Entry {
 #[derive(Default)]
 pub struct State {
     pub entries: Vec<Entry>,
+    /// Row index armed for deletion; the row shows an inline confirm
+    /// until it's confirmed, cancelled, or the list rescans.
+    pub pending_delete: Option<usize>,
 }
 
 impl State {
     pub fn scan(replays_dir: &std::path::Path) -> State {
         let mut entries = Vec::new();
         let Ok(dir) = std::fs::read_dir(replays_dir) else {
-            return State { entries };
+            return State {
+                entries,
+                pending_delete: None,
+            };
         };
         for entry in dir.filter_map(|e| e.ok()) {
             let path = entry.path();
@@ -34,7 +40,9 @@ impl State {
             {
                 continue;
             }
-            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
             match gbaroll_replay::Replay::parse(&bytes) {
                 Ok(replay) => entries.push(Entry {
                     path,
@@ -51,12 +59,17 @@ impl State {
                 .cmp(&a.metadata.started_at_unix_micros)
                 .then_with(|| b.path.cmp(&a.path))
         });
-        State { entries }
+        State {
+            entries,
+            pending_delete: None,
+        }
     }
 }
 
 fn format_date(micros: Option<u64>) -> String {
-    let Some(micros) = micros else { return "?".to_string() };
+    let Some(micros) = micros else {
+        return "?".to_string();
+    };
     chrono::DateTime::from_timestamp_micros(micros as i64)
         .map(|utc| {
             utc.with_timezone(&chrono::Local)
@@ -72,13 +85,23 @@ pub fn view(app: &App) -> Element<'_, Message> {
     if state.entries.is_empty() {
         return container(
             column![
-                text("No replays yet.").size(16),
+                super::icons::icon(super::icons::Icon::Film, 30.0),
+                text("No replays yet").size(17),
                 text(format!(
-                    "Netplay sessions record themselves into\n{}",
+                    "Completed netplay sessions appear here automatically.\n{}",
                     app.config.replays_dir.display()
                 ))
                 .size(13),
-                button(text("rescan")).on_press(Message::RescanReplays),
+                button(
+                    row![
+                        super::icons::icon(super::icons::Icon::RefreshCw, 14.0),
+                        text("Rescan"),
+                    ]
+                    .spacing(7)
+                    .align_y(iced::Alignment::Center),
+                )
+                .padding([7, 12])
+                .on_press(Message::RescanReplays),
             ]
             .spacing(8)
             .align_x(iced::Alignment::Center),
@@ -115,12 +138,54 @@ pub fn view(app: &App) -> Element<'_, Message> {
             titles.dedup();
             titles
         };
-        let have_all = meta.players.iter().all(|p| app.library.by_crc32(p.rom_crc32).is_some());
+        let have_all = meta
+            .players
+            .iter()
+            .all(|p| app.library.by_crc32(p.rom_crc32).is_some());
 
-        let mut watch = button(text("Watch")).padding([4, 10]);
+        let mut watch = button(
+            row![
+                super::icons::icon(super::icons::Icon::Play, 14.0),
+                text("Watch"),
+            ]
+            .spacing(6)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding([5, 10])
+        .style(button::primary);
         if have_all {
             watch = watch.on_press(Message::ReplayWatch(index));
         }
+
+        // Deleting is irreversible, so the trash icon only arms an
+        // inline confirm; the loud danger style is saved for that step.
+        let actions: Element<'_, Message> = if state.pending_delete == Some(index) {
+            row![
+                text("Delete this recording?").size(12),
+                button(text("Delete").size(12))
+                    .padding([5, 10])
+                    .style(button::danger)
+                    .on_press(Message::ReplayDeleteConfirmed(index)),
+                button(text("Keep").size(12))
+                    .padding([5, 10])
+                    .style(button::secondary)
+                    .on_press(Message::ReplayDeleteCanceled),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center)
+            .into()
+        } else {
+            row![
+                watch,
+                button(super::icons::icon(super::icons::Icon::Trash2, 15.0))
+                    .padding([6, 9])
+                    .style(button::secondary)
+                    .on_press(Message::ReplayDeleteRequested(index)),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center)
+            .into()
+        };
 
         rows = rows.push(
             container(
@@ -147,20 +212,18 @@ pub fn view(app: &App) -> Element<'_, Message> {
                             if have_all {
                                 text("")
                             } else {
-                                text("missing ROM(s)").size(12).style(|theme: &Theme| text::Style {
-                                    color: Some(theme.extended_palette().danger.base.color),
-                                })
+                                text("missing ROM(s)")
+                                    .size(12)
+                                    .style(|theme: &Theme| text::Style {
+                                        color: Some(theme.extended_palette().danger.base.color),
+                                    })
                             },
                         ]
                         .spacing(10),
                     ]
                     .spacing(2)
                     .width(Length::Fill),
-                    watch,
-                    button(text("Delete"))
-                        .padding([4, 10])
-                        .style(button::danger)
-                        .on_press(Message::ReplayDelete(index)),
+                    actions,
                 ]
                 .spacing(8)
                 .align_y(iced::Alignment::Center),
@@ -168,7 +231,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .padding(PADDING)
             .width(Length::Fill)
             .style(|theme: &Theme| container::Style {
-                background: Some(iced::Background::Color(theme.extended_palette().background.weak.color)),
+                background: Some(iced::Background::Color(
+                    theme.extended_palette().background.weak.color,
+                )),
                 border: iced::Border {
                     radius: 4.0.into(),
                     ..Default::default()
@@ -180,9 +245,32 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
     column![
         row![
-            text(format!("{} replay(s)", state.entries.len())),
+            column![
+                text("Replays").size(18),
+                text(format!(
+                    "{} {}",
+                    state.entries.len(),
+                    if state.entries.len() == 1 {
+                        "recording"
+                    } else {
+                        "recordings"
+                    }
+                ))
+                .size(11),
+            ]
+            .spacing(1),
             iced::widget::Space::new().width(Length::Fill),
-            button(text("rescan")).padding([8, 14]).on_press(Message::RescanReplays),
+            button(
+                row![
+                    super::icons::icon(super::icons::Icon::RefreshCw, 14.0),
+                    text("Rescan").size(12),
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center),
+            )
+            .padding([7, 11])
+            .style(button::secondary)
+            .on_press(Message::RescanReplays),
         ]
         .align_y(iced::Alignment::Center),
         scrollable(rows).height(Length::Fill),

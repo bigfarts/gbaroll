@@ -27,7 +27,10 @@ fn wait_event<T>(
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .unwrap_or_else(|| panic!("timed out waiting for {what}"));
-        match handle.events.recv_timeout(remaining.min(Duration::from_millis(100))) {
+        match handle
+            .events
+            .recv_timeout(remaining.min(Duration::from_millis(100)))
+        {
             Ok(event) => {
                 if let LobbyEvent::Fatal(e) = &event {
                     panic!("lobby died waiting for {what}: {e}");
@@ -50,11 +53,15 @@ fn wait_event<T>(
 
 /// Run a solo machine briefly, then freeze it and capture its encoded
 /// boot payload — the client-side half of the plug-in handshake.
-fn solo_and_capture(rom: &[u8], crc: u32, run_for: Duration) -> (crate::session::SessionRuntime, Vec<u8>) {
+fn solo_and_capture(
+    rom: &[u8],
+    crc: u32,
+    run_for: Duration,
+) -> (crate::session::SessionRuntime, Vec<u8>) {
     let binder = crate::platform::audio::LateBinder::new();
     let session = local::start(
         local::LocalArgs {
-            roms: vec![rom.to_vec()],
+            rom: rom.to_vec(),
             rom_crc32: crc,
             save: None,
         },
@@ -80,7 +87,8 @@ fn solo_and_capture(rom: &[u8], crc: u32, run_for: Duration) -> (crate::session:
 
 #[test]
 fn two_player_netplay_smoke() {
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).try_init();
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .try_init();
     mgba::log::install_default_logger();
 
     // In-process signaling server on an ephemeral port.
@@ -127,10 +135,19 @@ fn two_player_netplay_smoke() {
     // The host never readies up — only the guest does; the host's seat
     // must still read ready in the roster.
     guest.send(LobbyCommand::SetReady { ready: true });
-    wait_event(&host, "everyone ready", Duration::from_secs(10), |e| match e {
-        LobbyEvent::Roster { players, .. } if players.len() == 2 && players.iter().all(|p| p.ready) => Some(()),
-        _ => None,
-    });
+    wait_event(
+        &host,
+        "everyone ready",
+        Duration::from_secs(10),
+        |e| match e {
+            LobbyEvent::Roster { players, .. }
+                if players.len() == 2 && players.iter().all(|p| p.ready) =>
+            {
+                Some(())
+            }
+            _ => None,
+        },
+    );
     host.send(LobbyCommand::Start);
 
     // Mesh + boot exchange (real datachannels over loopback): answer each
@@ -142,7 +159,10 @@ fn two_player_netplay_smoke() {
         let sides = [(&host, &host_blob), (&guest, &guest_blob)];
         let deadline = Instant::now() + Duration::from_secs(60);
         while bundles.iter().any(|b| b.is_none()) {
-            assert!(Instant::now() < deadline, "timed out waiting for mesh + exchange");
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for mesh + exchange"
+            );
             for (i, (handle, blob)) in sides.iter().enumerate() {
                 while let Ok(event) = handle.events.try_recv() {
                     match event {
@@ -160,8 +180,14 @@ fn two_player_netplay_smoke() {
     let guest_bundle = bundles[1].take().unwrap();
 
     // Every peer must hold the identical payload set after the exchange.
-    assert_eq!(host_bundle.boots, guest_bundle.boots, "exchanged payloads differ");
-    assert_eq!(host_bundle.boots, vec![host_blob.clone(), guest_blob.clone()]);
+    assert_eq!(
+        host_bundle.boots, guest_bundle.boots,
+        "exchanged payloads differ"
+    );
+    assert_eq!(
+        host_bundle.boots,
+        vec![host_blob.clone(), guest_blob.clone()]
+    );
 
     // Boot both sessions. No audio backend in tests; each session gets
     // its own silent binder.
@@ -189,7 +215,10 @@ fn two_player_netplay_smoke() {
     // live during this — surviving it means both peers rebuilt the
     // identical machine from the exchanged captures.
     for i in 0..40u32 {
-        host_session.shared.joyflags.store(if i % 4 < 2 { 0x001 } else { 0x002 }, Ordering::Relaxed);
+        host_session
+            .shared
+            .joyflags
+            .store(if i % 4 < 2 { 0x001 } else { 0x002 }, Ordering::Relaxed);
         guest_session
             .shared
             .joyflags
@@ -224,7 +253,10 @@ fn two_player_netplay_smoke() {
         }
     };
     let host_end = wait_end("host", &host_session);
-    assert!(matches!(host_end, SessionEnd::Unplugged), "unexpected host end: {host_end:?}");
+    assert!(
+        matches!(host_end, SessionEnd::Unplugged),
+        "unexpected host end: {host_end:?}"
+    );
     let guest_end = wait_end("guest", &guest_session);
     assert!(
         matches!(
@@ -248,7 +280,13 @@ fn two_player_netplay_smoke() {
 
     // The guest's machine continues solo from the unplug.
     let binder = crate::platform::audio::LateBinder::new();
-    let resumed = local::resume(guest_handoff, crc, &binder, Arc::new(tokio::sync::Notify::new())).expect("resume");
+    let resumed = local::resume(
+        guest_handoff,
+        crc,
+        &binder,
+        Arc::new(tokio::sync::Notify::new()),
+    )
+    .expect("resume");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let frontier = resumed.shared.stats.lock().unwrap().frontier;
@@ -271,11 +309,19 @@ fn two_player_netplay_smoke() {
         .map(|e| e.path())
         .collect();
     replay_files.sort();
-    assert_eq!(replay_files.len(), 2, "expected two replays, got {replay_files:?}");
+    assert_eq!(
+        replay_files.len(),
+        2,
+        "expected two replays, got {replay_files:?}"
+    );
     for path in replay_files {
         let replay = gbaroll_replay::Replay::parse(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(replay.num_players(), 2);
-        assert!(replay.is_complete, "replay {} not finalized", path.display());
+        assert!(
+            replay.is_complete,
+            "replay {} not finalized",
+            path.display()
+        );
         assert!(
             replay.inputs.len() > 60,
             "replay {} too short: {}",
@@ -305,14 +351,19 @@ fn playback_engine_seek_is_exact() {
         rtc_unix_micros: Some(1_752_000_000_000_000),
     };
     // A varying input stream so states actually differ tick to tick.
-    let inputs: Vec<Vec<u32>> = (0..240u32).map(|i| vec![i & 0x3ff, (i * 3) & 0x3ff]).collect();
+    let inputs: Vec<Vec<u32>> = (0..240u32)
+        .map(|i| vec![i & 0x3ff, (i * 3) & 0x3ff])
+        .collect();
 
     let store = engine::SnapshotStore::new(inputs.len() as u32, 2);
     let progress = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     engine::run_prefetch(&config, &inputs, store.clone(), progress.clone(), cancel).unwrap();
     assert_eq!(progress.load(Ordering::Relaxed), inputs.len() as u32);
-    assert!(store.best_at_or_before(0).is_some(), "boot keyframe missing");
+    assert!(
+        store.best_at_or_before(0).is_some(),
+        "boot keyframe missing"
+    );
 
     // Ground truth: a linear run to tick 150.
     let target = 150u32;
@@ -324,8 +375,13 @@ fn playback_engine_seek_is_exact() {
 
     // Seek path: nearest keyframe at or before the target, then step.
     let mut seeked = engine::Playback::new(&config, std::sync::Arc::new(inputs.clone())).unwrap();
-    let key = store.best_at_or_before(target).expect("keyframe below target");
-    assert!(key.tick <= target && key.tick > 0, "prefetch never keyframed mid-stream");
+    let key = store
+        .best_at_or_before(target)
+        .expect("keyframe below target");
+    assert!(
+        key.tick <= target && key.tick > 0,
+        "prefetch never keyframed mid-stream"
+    );
     seeked.load(&key).unwrap();
     while seeked.cursor() < target {
         assert!(seeked.step());
@@ -366,12 +422,13 @@ fn playback_session_scrubs() {
         gbaroll_replay::Replay::parse(&w.finish().unwrap()).unwrap()
     };
 
-    let binder = crate::platform::audio::LateBinder::new();
+    let mut binder = crate::platform::audio::LateBinder::new();
+    binder.set_sample_rate(48_000);
+    let mut audio_tap = binder.clone();
     let session = crate::session::playback::start(
         crate::session::playback::PlaybackArgs {
             replay,
             roms: vec![rom.clone(), rom],
-            path: "test.gbrr".into(),
         },
         &binder,
         Arc::new(tokio::sync::Notify::new()),
@@ -390,9 +447,24 @@ fn playback_session_scrubs() {
         std::thread::sleep(Duration::from_millis(50));
     }
 
+    // Exercise the callback-facing PCM handoff while the drive captures
+    // snapshots. This diagnostic ROM does not initialize GBA sound, so
+    // an empty read is valid; importantly it must not affect pacing.
+    for _ in 0..20 {
+        let mut pcm = [[0i16; 2]; 480];
+        let _ = crate::platform::audio::Stream::fill(&mut audio_tap, &mut pcm);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
     // Async backward seek: pause (like a scrub press), request, land.
     let handles = session.playback.as_ref().unwrap();
     session.shared.paused.store(true, Ordering::Relaxed);
+    let mut paused_pcm = [[0i16; 2]; 480];
+    assert_eq!(
+        crate::platform::audio::Stream::fill(&mut audio_tap, &mut paused_pcm),
+        0,
+        "paused replay leaked queued audio"
+    );
     handles.seek.request(30, false);
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
@@ -400,12 +472,18 @@ fn playback_session_scrubs() {
         if position == 30 && handles.seek.pending_target().is_none() {
             break;
         }
-        assert!(Instant::now() < deadline, "seek never landed (at {position})");
+        assert!(
+            Instant::now() < deadline,
+            "seek never landed (at {position})"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 
     // The stores can preview around the playhead.
-    assert!(handles.nearest_snapshot(30).is_some(), "no snapshot near the playhead");
+    assert!(
+        handles.nearest_snapshot(30).is_some(),
+        "no snapshot near the playhead"
+    );
 
     // Resume-after-seek: forward this time.
     handles.seek.request(120, true);
