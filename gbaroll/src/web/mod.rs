@@ -83,18 +83,37 @@ impl Spike {
             self.ticks += 1;
             if self.ticks == DIGEST_TICK && !self.digest_logged {
                 self.digest_logged = true;
-                if let Some(buf) = self.link.video_buffer(0) {
-                    log::info!(
-                        "determinism gate: video crc32 {:08x} at tick {}",
-                        crc32fast::hash(buf),
+                // The engine's own cross-peer state digest (registers +
+                // RAMs + lockstep state) — the desync canary, exactly
+                // what must match the native build.
+                match self.link.save() {
+                    Ok(snapshot) => log::info!(
+                        "determinism gate: state digest {:08x} at tick {}",
+                        snapshot.digest(),
                         self.ticks
-                    );
+                    ),
+                    Err(e) => log::error!("determinism gate: snapshot failed: {e}"),
                 }
             }
         }
         let batch_ms = performance_now() - batch_start;
 
-        if let Some(buf) = self.link.video_buffer(0) {
+        // The first seconds show a synthetic BGR555 gradient through the
+        // real present path (the testrom's own screen is blank white) —
+        // a visible check that upload + decode + draw work.
+        if self.ticks < 60 {
+            let mut pattern = vec![0u8; 240 * 160 * 2];
+            for y in 0..160u16 {
+                for x in 0..240u16 {
+                    let texel = ((x * 31 / 239) & 0x1f)          // red left→right
+                        | ((((y * 31) / 159) & 0x1f) << 5)       // green top→bottom
+                        | ((((x + y) / 13) & 0x1f) << 10);       // blue diagonal bands
+                    let i = (y as usize * 240 + x as usize) * 2;
+                    pattern[i..i + 2].copy_from_slice(&texel.to_le_bytes());
+                }
+            }
+            self.presenter.present(&pattern);
+        } else if let Some(buf) = self.link.video_buffer(0) {
             self.presenter.present(buf);
         }
 
