@@ -387,22 +387,6 @@ main.settings-main {
     background: rgba(122, 162, 247, 0.14);
 }
 
-/* Every row reserves the checkmark's slot; only the selected row
-   inks it — geometry never shifts. */
-.pick-label::after {
-    content: "✓";
-    width: 1.1em;
-    text-align: right;
-    margin-left: auto;
-    color: transparent;
-    font-weight: 700;
-    flex: none;
-}
-
-.pick-row.selected .pick-label::after {
-    color: var(--accent);
-}
-
 /* The focus ring, when keyboard focus sits on the row's radio. */
 .pick-row:has(.pick-radio:focus-visible) {
     outline: 2px solid var(--accent);
