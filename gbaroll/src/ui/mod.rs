@@ -10,6 +10,7 @@ mod session_view;
 mod settings;
 mod shell;
 mod telemetry;
+mod touch;
 
 pub use shell::App;
 

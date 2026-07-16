@@ -6,6 +6,9 @@ license = "MPL-2.0"
 publish = false
 
 [dependencies]
-serde.workspace = true
-bincode.workspace = true
-thiserror.workspace = true
+prost.workspace = true
+
+[build-dependencies]
+prost-build = "0.14"
+# Pure-Rust protobuf compiler: no system `protoc` needed.
+protox = "0.9"

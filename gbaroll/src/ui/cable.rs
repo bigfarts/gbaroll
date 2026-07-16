@@ -248,9 +248,12 @@ pub fn CableBody() -> Element {
     // My library, for the "you need a copy of every ROM" roster check —
     // and for each seat's friendly name: the wire only carries the
     // header title, but the No-Intro name resolves locally by CRC32.
+    // The DAT knows names for ROMs the library doesn't hold, so even a
+    // missing ROM reads by its proper name.
     let (have_crc, roster_names) = {
         let lib = ctx.library.read();
         let lib = lib.as_ref().and_then(|v| v.as_ref()).map(|(lib, _)| lib);
+        let dat = ctx.dat.read();
         let crcs: std::collections::HashSet<u32> = lib
             .map(|lib| lib.roms.iter().map(|r| r.crc32).collect())
             .unwrap_or_default();
@@ -262,6 +265,11 @@ pub fn CableBody() -> Element {
                     .map(|p| {
                         lib.and_then(|l| l.by_crc32(p.rom_crc32))
                             .map(|r| r.display_name().to_string())
+                            .or_else(|| {
+                                dat.as_ref()
+                                    .and_then(|d| d.lookup(p.rom_crc32))
+                                    .map(str::to_string)
+                            })
                             .unwrap_or_else(|| p.rom_title.clone())
                     })
                     .collect()
@@ -311,16 +319,40 @@ pub fn CableBody() -> Element {
                         }
                     }
                 }
-                if let Some(status) = &ui.status {
-                    p { class: "sub", "{status}" }
+                // One reserved line for lobby status (or the host's
+                // waiting hint), always rendered: text swapping in and
+                // out must never shift the buttons below.
+                p { class: "sub cable-status",
+                    {
+                        let connected = ui.code.is_some();
+                        ui.status.clone().unwrap_or_else(|| {
+                            if connected && ui.my_idx == 0 && !ui.starting {
+                                if ui.players.len() < 2 {
+                                    "Waiting for players to join.".to_string()
+                                } else if !ui.players.iter().all(|p| p.ready) {
+                                    "Waiting for everyone to ready up.".to_string()
+                                } else {
+                                    String::new()
+                                }
+                            } else {
+                                String::new()
+                            }
+                        })
+                    }
                 }
                 div { class: "menu-actions",
                     if ui.my_idx == 0 {
-                        // The host's seat is always ready; they just start
-                        // the room once everyone else is.
+                        // The host's seat is always ready; they start the
+                        // room once it's full enough and everyone else is
+                        // ready. Until then the button is simply gray —
+                        // including while the server connection is still
+                        // coming up.
                         button {
                             class: "btn primary",
-                            disabled: ui.starting || !ui.players.iter().all(|p| p.ready),
+                            disabled: ui.code.is_none()
+                                || ui.starting
+                                || ui.players.len() < 2
+                                || !ui.players.iter().all(|p| p.ready),
                             onclick: move |_| {
                                 if let Some(ui) = LOBBY_UI.write().as_mut() {
                                     ui.starting = true;
@@ -332,8 +364,9 @@ pub fn CableBody() -> Element {
                         }
                     } else {
                         button {
-                            class: if ui.my_ready { "btn" } else { "btn primary" },
-                            disabled: ui.starting
+                            class: if ui.my_ready { "btn ready-toggle" } else { "btn primary ready-toggle" },
+                            disabled: ui.code.is_none()
+                                || ui.starting
                                 || ui.players.iter().any(|p| !have_crc.contains(&p.rom_crc32)),
                             onclick: {
                                 let ready = !ui.my_ready;
@@ -364,9 +397,6 @@ pub fn CableBody() -> Element {
                         "Leave"
                     }
                 }
-                if ui.my_idx == 0 && !ui.starting && !ui.players.iter().all(|p| p.ready) {
-                    p { class: "hint", "Waiting for everyone to ready up." }
-                }
             } else {
                 // Offline: host a new room or join a friend's.
                 button {
@@ -385,6 +415,9 @@ pub fn CableBody() -> Element {
                         r#type: "text",
                         placeholder: "6-character code",
                         value: "{code_entry}",
+                        spellcheck: "false",
+                        autocomplete: "off",
+                        autocapitalize: "characters",
                         oninput: move |evt: FormEvent| {
                             code_entry.set(sanitize_room_code(&evt.value()));
                         },

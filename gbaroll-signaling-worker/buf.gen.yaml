@@ -1,0 +1,11 @@
+# Generates src/gen/signaling_pb.ts from the shared schema:
+#   pnpm gen
+# The output is committed so builds don't depend on codegen.
+# js+dts rather than ts: the node test runner runs TypeScript by
+# stripping types, which can't express TS enums — plain JS with
+# declaration files works everywhere.
+version: v2
+plugins:
+  - local: protoc-gen-es
+    out: src/gen
+    opt: target=js+dts

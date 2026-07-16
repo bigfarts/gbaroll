@@ -6,9 +6,7 @@
 
 use futures::channel::mpsc;
 use futures::{FutureExt, StreamExt};
-use gbaroll_signaling::{
-    ClientMessage, ErrorKind, PlayerInfo, ServerMessage, StartPlayer, PROTOCOL_VERSION,
-};
+use gbaroll_signaling::{server_message, ClientMessage, ErrorKind, PlayerInfo, ServerMessage, StartPlayer};
 
 use crate::net::mesh::{self, PeerLink};
 use crate::net::ws::SignalSocket;
@@ -44,10 +42,10 @@ pub enum LobbyEvent {
     SessionReady(Box<SessionBundle>),
 }
 
-/// Everything a netplay session needs to boot.
+/// Everything a netplay session needs to boot. The shared RTC seed
+/// isn't here: it rides the host's boot payload over the peer protocol.
 pub struct SessionBundle {
     pub room_code: String,
-    pub clock_unix_micros: u64,
     pub players: Vec<StartPlayer>,
     pub local_player: usize,
     pub peers: Vec<PeerLink>,
@@ -114,19 +112,10 @@ async fn run(
     let mut socket = SignalSocket::connect(&args.server_url).await?;
 
     let first = match &args.mode {
-        LobbyMode::Create => ClientMessage::CreateRoom {
-            protocol_version: PROTOCOL_VERSION,
-            nick: args.nick.clone(),
-            rom_crc32: args.rom_crc32,
-            rom_title: args.rom_title.clone(),
-        },
-        LobbyMode::Join { code } => ClientMessage::JoinRoom {
-            protocol_version: PROTOCOL_VERSION,
-            code: code.clone(),
-            nick: args.nick.clone(),
-            rom_crc32: args.rom_crc32,
-            rom_title: args.rom_title.clone(),
-        },
+        LobbyMode::Create => ClientMessage::create_room(&args.nick, args.rom_crc32, &args.rom_title),
+        LobbyMode::Join { code } => {
+            ClientMessage::join_room(code, &args.nick, args.rom_crc32, &args.rom_title)
+        }
     };
     send(&socket, &first)?;
 
@@ -140,16 +129,16 @@ async fn run(
             cmd = cmd_rx.next() => {
                 match cmd {
                     Some(LobbyCommand::SetReady { ready }) => {
-                        send(&socket, &ClientMessage::SetReady { ready })?;
+                        send(&socket, &ClientMessage::set_ready(ready))?;
                     }
                     Some(LobbyCommand::Start) => {
-                        send(&socket, &ClientMessage::Start)?;
+                        send(&socket, &ClientMessage::start())?;
                     }
                     // A boot capture belongs to the start phase; stray
                     // ones in the lobby phase mean nothing.
                     Some(LobbyCommand::Boot(_)) => {}
                     Some(LobbyCommand::Leave) | None => {
-                        let _ = send(&socket, &ClientMessage::Leave);
+                        let _ = send(&socket, &ClientMessage::leave());
                         socket.close();
                         return Ok(());
                     }
@@ -159,39 +148,43 @@ async fn run(
                 let Some(bytes) = msg else {
                     anyhow::bail!("signaling connection closed");
                 };
-                let msg: ServerMessage = match gbaroll_signaling::decode(&bytes) {
-                    Ok(m) => m,
-                    Err(_) => continue,
+                let msg = match gbaroll_signaling::decode::<ServerMessage>(&bytes) {
+                    Ok(ServerMessage { msg: Some(m) }) => m,
+                    _ => continue,
                 };
                 match msg {
-                    ServerMessage::Hello { ice_servers: servers } => {
-                        ice_servers = servers;
+                    server_message::Msg::Hello(hello) => {
+                        ice_servers = hello.ice_servers;
                     }
-                    ServerMessage::RoomCreated { code } | ServerMessage::RoomJoined { code } => {
-                        room_code = code.clone();
-                        let _ = events.unbounded_send(LobbyEvent::Joined { code });
+                    server_message::Msg::RoomCreated(m) => {
+                        room_code = m.code.clone();
+                        let _ = events.unbounded_send(LobbyEvent::Joined { code: m.code });
                     }
-                    ServerMessage::Roster { players, your_idx } => {
+                    server_message::Msg::RoomJoined(m) => {
+                        room_code = m.code.clone();
+                        let _ = events.unbounded_send(LobbyEvent::Joined { code: m.code });
+                    }
+                    server_message::Msg::Roster(roster) => {
                         let _ = events.unbounded_send(LobbyEvent::Roster {
-                            players,
-                            your_idx: your_idx as usize,
+                            players: roster.players,
+                            your_idx: roster.your_idx as usize,
                         });
                     }
-                    ServerMessage::Error { kind, message } => {
+                    server_message::Msg::Error(e) => {
                         let fatal = matches!(
-                            kind,
+                            e.kind(),
                             ErrorKind::ProtocolVersionMismatch
                                 | ErrorKind::RoomNotFound
                                 | ErrorKind::RoomFull
                                 | ErrorKind::RoomAlreadyStarted
                         );
                         if fatal {
-                            anyhow::bail!("{message}");
+                            anyhow::bail!("{}", e.message);
                         }
-                        let _ = events.unbounded_send(LobbyEvent::Error(message));
+                        let _ = events.unbounded_send(LobbyEvent::Error(e.message));
                     }
-                    ServerMessage::Starting { clock_unix_micros, players, your_idx } => {
-                        break (clock_unix_micros, players, your_idx as usize);
+                    server_message::Msg::Starting(s) => {
+                        break (s.players, s.your_idx as usize);
                     }
                     _ => {}
                 }
@@ -202,7 +195,7 @@ async fn run(
     // Mesh phase: the websocket becomes the signal relay. The UI captures
     // the local machine as soon as it sees Starting, so the boot payload
     // rides the command queue while the mesh comes up.
-    let (clock_unix_micros, players, local_player) = starting;
+    let (players, local_player) = starting;
     let _ = events.unbounded_send(LobbyEvent::Starting);
     let _ = events.unbounded_send(LobbyEvent::Connecting(format!(
         "connecting to {} peer(s)…",
@@ -227,19 +220,19 @@ async fn run(
 
     let _ = events.unbounded_send(LobbyEvent::SessionReady(Box::new(SessionBundle {
         room_code,
-        clock_unix_micros,
         players,
         local_player,
         peers,
         boots,
     })));
 
-    // The room is done with the server; close politely.
-    let _ = send(&socket, &ClientMessage::Leave);
+    // The room is done with the server; close politely — the server
+    // deletes the room once every member has left.
+    let _ = send(&socket, &ClientMessage::leave());
     socket.close();
     Ok(())
 }
 
 fn send(socket: &SignalSocket, msg: &ClientMessage) -> anyhow::Result<()> {
-    socket.send(&gbaroll_signaling::encode(msg)?)
+    socket.send(&gbaroll_signaling::encode(msg))
 }

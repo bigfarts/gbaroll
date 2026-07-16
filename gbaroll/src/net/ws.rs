@@ -8,11 +8,19 @@ use futures::StreamExt;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
+/// How often the keepalive ping goes out. Browsers can't send protocol
+/// pings, so a text "ping" keeps NATs and idle-connection reapers off a
+/// quiet lobby's back; servers answer "pong" (which the binary-only
+/// message handler ignores).
+const KEEPALIVE_MS: i32 = 25_000;
+
 pub struct SignalSocket {
     ws: web_sys::WebSocket,
     rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    keepalive_id: Option<i32>,
     /// Keep the JS callbacks alive as long as the socket.
     _closures: Vec<Closure<dyn FnMut(web_sys::Event)>>,
+    _keepalive: Option<Closure<dyn FnMut()>>,
 }
 
 impl SignalSocket {
@@ -79,10 +87,29 @@ impl SignalSocket {
             .map_err(|_| anyhow::anyhow!("websocket setup dropped"))?
             .map_err(|e| anyhow::anyhow!("can't reach signaling server at {url}: {e}"))?;
 
+        let keepalive: Closure<dyn FnMut()> = {
+            let ws = ws.clone();
+            Closure::new(move || {
+                if ws.ready_state() == web_sys::WebSocket::OPEN {
+                    let _ = ws.send_with_str("ping");
+                }
+            })
+        };
+        let keepalive_id = web_sys::window()
+            .and_then(|w| {
+                w.set_interval_with_callback_and_timeout_and_arguments_0(
+                    keepalive.as_ref().unchecked_ref(),
+                    KEEPALIVE_MS,
+                )
+                .ok()
+            });
+
         Ok(SignalSocket {
             ws,
             rx,
+            keepalive_id,
             _closures: closures,
+            _keepalive: Some(keepalive),
         })
     }
 
@@ -105,6 +132,9 @@ impl SignalSocket {
 impl Drop for SignalSocket {
     fn drop(&mut self) {
         // Detach callbacks before they dangle, then close.
+        if let (Some(id), Some(w)) = (self.keepalive_id, web_sys::window()) {
+            w.clear_interval_with_handle(id);
+        }
         self.ws.set_onopen(None);
         self.ws.set_onerror(None);
         self.ws.set_onclose(None);

@@ -22,13 +22,74 @@ html,
 body {
     margin: 0;
     padding: 0;
+    height: 100%;
+    /* The viewport is the app frame: nothing scrolls at the page level
+       (panes scroll internally), nothing rubber-bands or pulls to
+       refresh. */
+    overflow: hidden;
+    overscroll-behavior: none;
+    /* Phones must not "helpfully" inflate text they think is small —
+       that's what made controls balloon on mobile. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
 }
 
 body {
     background: var(--bg);
     color: var(--text);
-    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-        "Helvetica Neue", Arial, sans-serif;
+    font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    /* Chrome, not a document: labels don't select, controls don't grow
+       text cursors or tap flashes. Fields opt back in below. */
+    cursor: default;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+}
+
+input,
+textarea {
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+::selection {
+    background: rgba(122, 162, 247, 0.35);
+}
+
+svg,
+img {
+    -webkit-user-drag: none;
+}
+
+/* Slim, quiet scrollbars on the internal panes. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--surface-2) transparent;
+}
+
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--surface-2);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--border);
+    background-clip: padding-box;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+    background: transparent;
 }
 
 h1,
@@ -73,7 +134,6 @@ code {
     color: var(--text);
     font: inherit;
     font-size: 13px;
-    cursor: pointer;
     white-space: nowrap;
 }
 
@@ -81,9 +141,13 @@ code {
     border-color: var(--accent);
 }
 
+/* Buttons depress like controls, not links. */
+.btn:not(:disabled):active {
+    filter: brightness(0.85);
+}
+
 .btn:disabled {
     opacity: 0.5;
-    cursor: default;
 }
 
 .btn.primary {
@@ -147,6 +211,7 @@ select {
     font: inherit;
     font-size: 13px;
     min-width: 220px;
+    caret-color: var(--accent);
 }
 
 input.wide {
@@ -186,28 +251,54 @@ kbd {
 /* --- tab shell ------------------------------------------------------ */
 
 .shell {
-    height: 100vh;
+    height: 100dvh;
     display: flex;
     flex-direction: column;
-    padding: 0 20px;
 }
 
-/* Play: the library and the saves sit side by side and fill the
-   window; their lists scroll internally. */
+/* Play: the library and the saves are two full-bleed panes split by a
+   hairline (a file-browser split view, not floating web cards); their
+   lists scroll internally and the launch strip is a bottom bar. */
 main.play-main {
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: minmax(0, 1fr) auto auto;
-    gap: 0 14px;
-    padding-bottom: 12px;
+    /* minmax(0, …): a long unbreakable title must never widen a track
+       past its viewport share (plain 1fr floors at min-content). */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: 0;
+    padding: 0;
 }
 
-main.play-main .card {
+main.play-main > .card {
+    background: transparent;
+    border-radius: 0;
+    margin: 0;
+    padding: 12px 16px;
     display: flex;
     flex-direction: column;
     min-height: 0;
+}
+
+main.play-main > .card:first-child {
+    border-right: 1px solid var(--border);
+}
+
+/* The content area under a file drag invites the drop. */
+main.dropping {
+    outline: 2px dashed var(--accent);
+    outline-offset: -6px;
+}
+
+/* Pane titles read as panel headers, not article headings (the
+   settings sections wear the same header). */
+main.play-main .card-head h2,
+main.settings-main .card > h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-dim);
 }
 
 main.play-main .rom-list,
@@ -217,16 +308,19 @@ main.play-main .save-list {
     overflow-y: auto;
 }
 
-main.play-main .launch-bar,
-main.play-main .dev-corner {
-    grid-column: 1 / -1;
-}
-
+/* The window's footer, full-bleed on the deep background (kept above
+   the home indicator on notched phones). */
 main.play-main .launch-bar {
-    padding-top: 12px;
+    grid-column: 1 / -1;
+    background: var(--bg-deep);
+    border-top: 1px solid var(--border);
+    padding: 7px 12px;
+    padding-bottom: calc(7px + env(safe-area-inset-bottom, 0px));
 }
 
 /* Settings keeps a readable column. */
+/* Settings: the same flat-pane language as Play — a column of
+   sections split by hairlines, not floating cards. */
 main.settings-main {
     flex: 1;
     min-height: 0;
@@ -234,55 +328,68 @@ main.settings-main {
     width: 100%;
     max-width: 980px;
     margin: 0 auto;
-    padding-bottom: 24px;
+    padding: 0 20px 24px;
 }
 
+main.settings-main .card {
+    background: transparent;
+    border-radius: 0;
+    margin: 0;
+    padding: 16px 0 14px;
+    border-bottom: 1px solid var(--border);
+}
+
+main.settings-main .card:last-child {
+    border-bottom: none;
+}
+
+/* A toolbar strip, not a page header: full-bleed, fixed height,
+   everything vertically centered. */
 .topbar {
+    flex: none;
     display: flex;
     align-items: center;
-    gap: 16px;
-    padding-top: 12px;
+    gap: 14px;
+    height: 46px;
+    padding: 0 14px;
+    background: var(--bg-deep);
     border-bottom: 1px solid var(--border);
-    margin-bottom: 16px;
-}
-
-.brand,
-.identity {
-    margin-bottom: 10px;
 }
 
 .brand h1 {
-    font-size: 20px;
-    letter-spacing: 0.02em;
+    font-size: 14px;
+    letter-spacing: 0.03em;
 }
 
-/* A real tab strip: underline indicator riding the topbar's rule. */
+/* A segmented control, not browser tabs. */
 .tabs {
     display: flex;
     gap: 2px;
-    align-self: flex-end;
-    margin-left: 12px;
-    margin-bottom: -1px;
+    padding: 2px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
 }
 
 .btn.tab {
     background: transparent;
     border: none;
-    border-bottom: 2px solid transparent;
-    border-radius: 0;
+    border-radius: 6px;
     color: var(--text-dim);
-    padding: 8px 14px 10px;
+    padding: 4px 14px;
+    /* The one place the hand cursor stays: tab navigation. */
+    cursor: pointer;
 }
 
 .btn.tab:hover {
     color: var(--text);
-    border-bottom-color: var(--border);
 }
 
 .btn.tab.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
+    background: var(--surface-2);
+    color: var(--text);
     font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 
 /* The nickname field, top-right of the shell (identity travels with
@@ -370,6 +477,32 @@ main.settings-main {
     border-color: var(--accent);
 }
 
+/* The importer, leading each list as a quiet dashed "add" row. */
+.pick-row.ghost-add {
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    background: transparent;
+    border: 1px dashed var(--border);
+    color: var(--text-dim);
+    font-size: 13px;
+}
+
+.pick-row.ghost-add:hover {
+    border-color: var(--accent);
+    color: var(--text);
+}
+
+.pick-row.ghost-add.success {
+    border-color: #9ece6a;
+    color: #9ece6a;
+}
+
+.pick-row.ghost-add.danger {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
 .pick-row.selected {
     border-color: var(--accent);
     background: rgba(122, 162, 247, 0.14);
@@ -388,7 +521,6 @@ main.settings-main {
     flex: 1;
     min-width: 0;
     padding: 8px 10px;
-    cursor: pointer;
 }
 
 /* Hidden but focusable: the row is the radio's label, the row ring
@@ -451,46 +583,49 @@ main.settings-main {
     font-size: 11px;
 }
 
+/* Same rhythm as .rom-list — the panes must mirror each other. */
 .save-list {
-    margin-top: 6px;
     display: flex;
     flex-direction: column;
     gap: 6px;
 }
 
-/* Step 3: the launch bar under both pickers; grayed out until a
-   game is picked. */
-/* Caption at the left edge, the Play button at the right. */
+/* Save names stay one line and ellipsize, like game titles (they
+   render as `code`; the fresh-save row as a span). */
+.save-list .pick-label > code,
+.save-list .pick-label > span {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* The footer bar under both pickers: just Play, at the right. */
 .launch-bar {
     display: flex;
-    flex-direction: row-reverse;
-    justify-content: space-between;
     align-items: center;
-    gap: 12px;
+    justify-content: flex-end;
+    gap: 10px;
     padding: 2px 6px;
 }
 
+/* A launch failure flashes in beside the button and truncates. */
+.launch-bar > .flash-ok,
+.launch-bar > .link-notice {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: right;
+}
+
 .launch-bar .btn.launch {
-    padding: 8px 22px;
-    font-size: 14px;
+    padding: 5px 18px;
 }
 
 .btn:disabled {
     opacity: 0.45;
-    cursor: default;
-}
-
-.dev-corner {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    color: var(--text-dim);
-    font-size: 12px;
-    padding: 0 4px;
-}
-
-.dev-corner .spacer {
-    flex: 1;
 }
 
 /* --- settings ------------------------------------------------------- */
@@ -536,7 +671,10 @@ main.settings-main {
     color: var(--text);
     font: inherit;
     font-size: 12px;
-    cursor: pointer;
+}
+
+.chip:not(:disabled):active {
+    filter: brightness(0.85);
 }
 
 .chip:hover {
@@ -688,7 +826,9 @@ main.settings-main {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    z-index: 5;
+    /* Above the touch controls (6): the open cable card must cover
+       them, not fight them for touches. */
+    z-index: 7;
 }
 
 .btn.status-chip {
@@ -758,7 +898,11 @@ main.settings-main {
 
 .roster-ready {
     display: inline-flex;
-    width: 1.2em;
+    justify-content: center;
+    /* Pinned to the check icon's box so the dot placeholder and the
+       icon occupy identical space — no shift on ready/unready. */
+    width: 16px;
+    flex: none;
     color: var(--text-dim);
 }
 
@@ -971,4 +1115,290 @@ main.settings-main {
 
 .cable .rtt {
     color: var(--muted);
+}
+
+/* Always one line tall, text or not — see the reserved status line in
+   cable.rs. */
+.cable-status {
+    min-height: 1.45em;
+    margin: 0;
+}
+
+/* "Ready up" and "Unready" differ in width; the button doesn't. */
+.btn.ready-toggle {
+    min-width: 96px;
+    justify-content: center;
+}
+
+/* --- touch controls ---------------------------------------------------- */
+
+/* On any touch screen the cable chip's icon is label enough. */
+@media (pointer: coarse) {
+    .cable-overlay .status-chip .chip-label {
+        display: none;
+    }
+}
+
+/* Rendered inert everywhere; a coarse-pointer landscape screen (a
+   phone held sideways) turns them on over the stage. */
+.touch-controls {
+    display: none;
+}
+
+@media (pointer: coarse) and (orientation: landscape) {
+    .touch-controls {
+        display: block;
+        position: absolute;
+        inset: 0;
+        /* Above the pause badge (5), below the cable overlay (7) and
+           the menu/end overlays (10). */
+        z-index: 6;
+        /* Only the controls themselves take touches; the stage stays
+           reachable between them. */
+        pointer-events: none;
+        touch-action: none;
+        -webkit-touch-callout: none;
+        color: var(--text-dim);
+        font-size: 12px;
+    }
+
+    .touch-controls > * {
+        pointer-events: auto;
+        position: absolute;
+        touch-action: none;
+    }
+
+    .tc-dpad {
+        left: 14px;
+        bottom: 16px;
+        /* Mirrored by DPAD_SIZE in ui/touch.rs. */
+        width: 132px;
+        height: 132px;
+        border-radius: 50%;
+        background: rgba(36, 40, 59, 0.4);
+        border: 1px solid rgba(59, 66, 97, 0.6);
+    }
+
+    /* The cross glyph; inert. */
+    .tc-dpad::before,
+    .tc-dpad::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(192, 202, 245, 0.1);
+        border-radius: 8px;
+        pointer-events: none;
+    }
+
+    .tc-dpad::before {
+        width: 34px;
+        height: 100px;
+    }
+
+    .tc-dpad::after {
+        width: 100px;
+        height: 34px;
+    }
+
+    .tc-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        background: rgba(36, 40, 59, 0.4);
+        border: 1px solid rgba(59, 66, 97, 0.6);
+        font-weight: 600;
+    }
+
+    .tc-dpad.held,
+    .tc-btn.held {
+        background: rgba(122, 162, 247, 0.3);
+        border-color: var(--accent);
+        color: var(--text);
+    }
+
+    .tc-a {
+        right: 16px;
+        bottom: 78px;
+        width: 58px;
+        height: 58px;
+    }
+
+    .tc-b {
+        right: 82px;
+        bottom: 22px;
+        width: 58px;
+        height: 58px;
+    }
+
+    /* Shoulders hug the top corners, like the real thing. */
+    .tc-l,
+    .tc-r {
+        top: 0;
+        width: 92px;
+        height: 32px;
+    }
+
+    .tc-l {
+        left: 0;
+        border-radius: 0 0 12px 0;
+        border-width: 0 1px 1px 0;
+    }
+
+    .tc-r {
+        right: 0;
+        border-radius: 0 0 0 12px;
+        border-width: 0 0 1px 1px;
+    }
+
+    .tc-pill {
+        border-radius: 999px;
+        height: 26px;
+        padding: 0 14px;
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .tc-start {
+        left: 50%;
+        transform: translateX(8px);
+        bottom: 12px;
+    }
+
+    .tc-select {
+        left: 50%;
+        transform: translateX(calc(-100% - 8px));
+        bottom: 12px;
+    }
+
+    .tc-menu {
+        left: 50%;
+        transform: translateX(calc(-100% - 6px));
+        top: 6px;
+        font-size: 13px;
+    }
+
+    /* The cable chip pairs with the menu pill at the top center (its
+       expanded card drops from the same spot) and wears the same look. */
+    .cable-overlay {
+        top: 6px;
+        right: auto;
+        left: 50%;
+        transform: translateX(6px);
+        align-items: flex-start;
+    }
+
+    .cable-overlay .btn.status-chip {
+        height: 26px;
+        padding: 0 14px;
+        border-radius: 999px;
+        background: rgba(36, 40, 59, 0.4);
+        border: 1px solid rgba(59, 66, 97, 0.6);
+        color: var(--text-dim);
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    /* The pause badge ducks under the L shoulder. */
+    .pause-badge {
+        top: 44px;
+    }
+
+    /* The expanded cards: one narrow column (charts scroll), centered
+       under their anchor and capped to the (short) landscape viewport,
+       with touch-sized controls. */
+    .tele-card {
+        width: min(320px, calc(100vw - 20px));
+        max-height: calc(100dvh - 42px);
+        transform: translateX(calc(-50% - 6px));
+    }
+
+    .tele-card .spark-row canvas {
+        height: 30px;
+    }
+
+    .tele-card .btn {
+        padding: 8px 14px;
+    }
+
+    .tele-card .btn.ghost.icon-btn {
+        padding: 8px;
+    }
+}
+
+/* --- small screens ---------------------------------------------------- */
+
+@media (max-width: 700px) {
+    .topbar {
+        gap: 8px;
+        padding: 0 10px;
+    }
+
+    /* The segmented control is identity enough. */
+    .brand {
+        display: none;
+    }
+
+    .btn.tab {
+        padding: 4px 10px;
+    }
+
+    .identity input {
+        width: 90px;
+        min-width: 0;
+        /* Pinned: the flexible-input rule below must not stretch the
+           nickname across the toolbar. */
+        flex: none;
+    }
+
+    /* Fixed-width controls yield to the viewport. (No blanket flex —
+       in a column pane, flexible inputs balloon vertically.) */
+    input:not([type]),
+    input[type="text"],
+    select {
+        min-width: 0;
+    }
+
+    /* Settings rows: the control fills the line under its label. */
+    .field input:not([type]),
+    .field input[type="text"],
+    .field select,
+    .field input[type="range"] {
+        width: auto;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .tele-card {
+        max-width: calc(100vw - 24px);
+    }
+}
+
+/* Narrow AND upright — a phone held portrait. Landscape keeps the
+   side-by-side split view (stacked panes on a short screen are two
+   useless slivers); only portrait stacks. */
+@media (max-width: 700px) and (orientation: portrait) {
+    main.play-main {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
+    }
+
+    main.play-main > .card:first-child {
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+    }
+
+    /* Settings fields: label above a full-width control (inline rows
+       fit fine in landscape). */
+    .field {
+        flex-wrap: wrap;
+    }
+
+    .field > label {
+        width: 100%;
+    }
 }

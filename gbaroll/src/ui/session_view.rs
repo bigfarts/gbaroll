@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
-use super::{cable, telemetry, use_ctx, Ctx};
+use super::{cable, telemetry, touch, use_ctx, Ctx};
 use crate::platform::input::{self, MappedKey};
 use crate::runtime::{FRAME_REV, MENU_OPEN, SESSION_EPOCH};
 use crate::session::{SessionEnd, SessionKind};
@@ -104,6 +104,9 @@ pub fn SessionView() -> Element {
                 // cable state; the menu and end overlays sit above it.
                 if end.is_none() && !menu_open && running {
                     telemetry::CableOverlay {}
+                    // Coarse-pointer landscape screens get on-screen
+                    // controls (CSS decides; it renders inert elsewhere).
+                    touch::TouchControls {}
                 }
                 // Pause only happens transiently (the lobby freezes the
                 // machine for its capture); the badge says why the game

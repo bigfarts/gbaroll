@@ -401,8 +401,6 @@ pub fn CableOverlay() -> Element {
         }
     }));
 
-    let lobby_running = cable::LOBBY_UI.read().is_some();
-
     rsx! {
         div { class: "cable-overlay",
             if !expanded {
@@ -418,19 +416,16 @@ pub fn CableOverlay() -> Element {
                             style: "color: {tone_for_abs(skew, 3, 7).css()}",
                             {signal_icon(skew)}
                         }
-                    } else if lobby_running {
-                        icons::Gamepad2 {}
-                        "Netplay lobby"
                     } else {
                         icons::Cable {}
-                        "Link cable"
+                        span { class: "chip-label", "Link cable" }
                     }
                 }
             } else if is_netplay {
                 // Expanded, connected: the telemetry card.
                 div { class: "tele-card",
                     div { class: "tele-head",
-                        h3 { "Link telemetry" }
+                        h3 { "Link cable" }
                         button {
                             class: "btn ghost icon-btn",
                             onclick: move |_| *PANEL_OPEN.write() = false,
@@ -462,7 +457,7 @@ pub fn CableOverlay() -> Element {
                 // Expanded, offline/lobby: room setup and the roster.
                 div { class: "tele-card",
                     div { class: "tele-head",
-                        h3 { if lobby_running { "Netplay lobby" } else { "Link cable" } }
+                        h3 { "Link cable" }
                         button {
                             class: "btn ghost icon-btn",
                             onclick: move |_| *PANEL_OPEN.write() = false,

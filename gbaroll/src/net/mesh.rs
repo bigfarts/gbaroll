@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use anyhow::Context as _;
 use futures::stream::{FuturesUnordered, SelectAll};
 use futures::{FutureExt, StreamExt};
-use gbaroll_signaling::{ClientMessage, IceServer, ServerMessage};
+use gbaroll_signaling::{server_message, ClientMessage, IceServer, ServerMessage};
 use gloo_timers::future::TimeoutFuture;
 
 use crate::net::protocol::{PeerControl, PeerSignal, BOOT_CHUNK, MAX_BOOT_SIZE, NET_VERSION};
@@ -140,15 +140,15 @@ async fn build_inner(
         futures::select! {
             msg = socket.next().fuse() => {
                 let bytes = msg.context("signaling server connection lost")?;
-                let msg: ServerMessage = match gbaroll_signaling::decode(&bytes) {
-                    Ok(m) => m,
-                    Err(_) => continue,
+                let msg = match gbaroll_signaling::decode::<ServerMessage>(&bytes) {
+                    Ok(ServerMessage { msg: Some(m) }) => m,
+                    _ => continue,
                 };
                 match msg {
-                    ServerMessage::Signal { from, payload } => {
-                        let from = from as usize;
+                    server_message::Msg::Signal(signal) => {
+                        let from = signal.peer as usize;
                         let Some(pending) = pendings.get_mut(&from) else { continue };
-                        let signal: PeerSignal = match bincode::deserialize(&payload) {
+                        let signal: PeerSignal = match bincode::deserialize(&signal.payload) {
                             Ok(s) => s,
                             Err(e) => {
                                 log::warn!("undecodable signal from player {from}: {e}");
@@ -195,8 +195,8 @@ async fn build_inner(
                             }
                         }
                     }
-                    ServerMessage::PeerLeft { player_idx } => {
-                        let player = player_idx as usize;
+                    server_message::Msg::PeerLeft(left) => {
+                        let player = left.player_idx as usize;
                         // Harmless if that edge is already up (the peer
                         // finished its mesh and left the server); only
                         // an edge that stays pending past the grace
@@ -246,12 +246,9 @@ async fn build_inner(
 }
 
 fn send_signal(socket: &SignalSocket, to: usize, signal: &PeerSignal) -> anyhow::Result<()> {
-    let msg = ClientMessage::Signal {
-        to: to as u8,
-        payload: bincode::serialize(signal)?,
-    };
+    let msg = ClientMessage::signal(to as u32, bincode::serialize(signal)?);
     socket
-        .send(&gbaroll_signaling::encode(&msg)?)
+        .send(&gbaroll_signaling::encode(&msg))
         .context("send signal")
 }
 

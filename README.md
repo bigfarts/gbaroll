@@ -42,10 +42,12 @@ when a prediction misses.
 
 - `gbaroll` — the client (iced UI, SDL3 audio + gamepad, wgpu
   framebuffer shader).
-- `gbaroll-signaling` — the signaling protocol (bincode over
-  WebSocket).
-- `gbaroll-signaling-server` — the room/rendezvous server
-  (`cargo run -p gbaroll-signaling-server -- --listen 0.0.0.0:1984`).
+- `gbaroll-signaling` — the signaling protocol: the protobuf schema
+  (`proto/signaling.proto`, the single source of truth) and its
+  generated Rust types.
+- `gbaroll-signaling-worker` — the room/rendezvous server, a TypeScript
+  Cloudflare Worker (Durable Object rooms; Cloudflare TURN via worker
+  secrets). Deployed at `wss://gbaroll-signaling.farts.fyi`.
 - `gbaroll-replay` — the replay container.
 
 The engine crates (`mgba-siolink`, `getgud`, `rennet`) come from the
@@ -54,8 +56,8 @@ tango workspace, expected as a sibling checkout at `../tango`.
 ## Running
 
 ```sh
-# the server (somewhere reachable):
-cargo run --release -p gbaroll-signaling-server
+# the server (or use the deployed wss://gbaroll-signaling.farts.fyi):
+cd gbaroll-signaling-worker && pnpm install && pnpm dev
 
 # the client:
 cargo run --release -p gbaroll

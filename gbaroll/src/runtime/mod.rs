@@ -128,6 +128,9 @@ pub struct Runtime {
     clock: clock::TickClock,
     pub held: input::HeldState,
     pub mapping: input::Mapping,
+    /// Joyflags held by the on-screen touch overlay, OR'd into every
+    /// pump alongside the mapped keyboard/gamepad state.
+    pub touch_keys: u32,
     /// OPFS, once the UI has it — the SRAM write-back target.
     storage: Option<crate::storage::Storage>,
     /// The telemetry panel's sample ring, captured per netplay frame.
@@ -179,6 +182,7 @@ impl Runtime {
             clock: clock::TickClock::new(),
             held: input::HeldState::default(),
             mapping: input::Mapping::default(),
+            touch_keys: 0,
             storage: None,
             metric_history: std::collections::VecDeque::with_capacity(
                 crate::session::HISTORY_LEN,
@@ -344,6 +348,10 @@ impl Runtime {
         }
         self.clock.reset();
         self.last_end = None;
+        // Present nothing until the new session publishes its first
+        // frame — the canvas keeps the outgoing session's image across
+        // plug-in/unplug swaps instead of flashing the blank vbuf.
+        self.presented_rev = 0;
         *SESSION_EPOCH.write() += 1;
     }
 
@@ -529,7 +537,7 @@ impl Runtime {
         // Input: gamepad snapshot + the held keyboard state → joyflags.
         if let Some(session) = &self.session {
             gamepad::poll_into(&mut self.held);
-            let joyflags = self.mapping.to_mgba_keys(&self.held);
+            let joyflags = self.mapping.to_mgba_keys(&self.held) | self.touch_keys;
             session
                 .shared()
                 .joyflags
@@ -683,7 +691,10 @@ impl Runtime {
                     .shared()
                     .vbuf_rev
                     .load(std::sync::atomic::Ordering::Acquire);
-                if rev != self.presented_rev {
+                // rev 0 = nothing published yet (a freshly swapped-in
+                // session): hold the previous image rather than flash
+                // its still-blank buffer.
+                if rev != self.presented_rev && rev != 0 {
                     self.presented_rev = rev;
                     let vbuf = session.shared().vbuf.lock().unwrap();
                     presenter.present(&vbuf);

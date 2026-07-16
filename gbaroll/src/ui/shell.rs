@@ -2,6 +2,7 @@
 //! resources), the session-view swap, and the tab shell. Action
 //! feedback is inline with whatever triggered it, not a global bar.
 
+use dioxus::html::HasFileData;
 use dioxus::prelude::*;
 
 use super::{icons, play, session_view, settings, use_ctx, Ctx, Tab};
@@ -102,6 +103,15 @@ pub fn App() -> Element {
 
     rsx! {
         document::Stylesheet { href: STYLE }
+        // App-frame viewport: no pinch zoom, edge-to-edge on notched
+        // screens, browser chrome tinted to match.
+        document::Meta {
+            name: "viewport",
+            // maximum-scale=1 stops iOS Safari's zoom-into-focused-field
+            // jump without oversizing fonts.
+            content: "width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no",
+        }
+        document::Meta { name: "theme-color", content: "#16161e" }
         if in_session {
             session_view::SessionView {}
         } else {
@@ -112,14 +122,26 @@ pub fn App() -> Element {
 
 #[component]
 fn Shell() -> Element {
-    let Ctx { mut config, .. } = use_ctx();
+    let Ctx {
+        mut config,
+        storage,
+        mut library_rev,
+        ..
+    } = use_ctx();
     let mut tab = use_signal(Tab::default);
     let current = tab();
     let nick = config.read().nick.clone();
+    // True while a file drag hovers the content area (the drop cue).
+    let mut drop_hover = use_signal(|| false);
 
     rsx! {
         document::Title { "gbaroll" }
-        div { class: "shell",
+        div {
+            class: "shell",
+            // A stray file drop must not navigate away from the app
+            // (imports go through the explicit pickers).
+            ondragover: move |evt| evt.prevent_default(),
+            ondrop: move |evt| evt.prevent_default(),
             header { class: "topbar",
                 div { class: "brand",
                     h1 { "gbaroll" }
@@ -147,14 +169,43 @@ fn Shell() -> Element {
                     input {
                         value: "{nick}",
                         placeholder: "nickname",
+                        spellcheck: "false",
+                        autocomplete: "off",
                         oninput: move |evt: FormEvent| {
                             config.with_mut(|c| c.nick = evt.value())
                         },
                     }
                 }
             }
+            // The whole content area is one drop target: dropped files
+            // import wherever they land, sorted by extension, and the
+            // outcome flashes on whichever pane(s) received something.
             main {
                 class: if current == Tab::Play { "play-main" } else { "settings-main" },
+                class: if drop_hover() { "dropping" },
+                ondragover: move |evt: DragEvent| {
+                    evt.prevent_default();
+                    if !*drop_hover.peek() {
+                        drop_hover.set(true);
+                    }
+                },
+                ondragleave: move |_| {
+                    if *drop_hover.peek() {
+                        drop_hover.set(false);
+                    }
+                },
+                ondrop: move |evt: DragEvent| {
+                    evt.prevent_default();
+                    drop_hover.set(false);
+                    let storage = storage.read().clone().flatten();
+                    let files = evt.files();
+                    async move {
+                        let Some(storage) = storage else { return };
+                        let (r, s, skipped) = crate::web::import_files(&storage, files).await;
+                        play::import_flashes(r, s, skipped);
+                        *library_rev.write() += 1;
+                    }
+                },
                 if current == Tab::Play {
                     play::PlayScreen {}
                 } else {

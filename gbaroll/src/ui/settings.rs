@@ -5,6 +5,7 @@
 
 use dioxus::prelude::*;
 
+use super::play::{flash, Flash, FlashText};
 use super::{icons, use_ctx, Ctx};
 use crate::platform::input::{self, DescribeKind, MappedKey};
 use crate::runtime::{CAPTURED, CAPTURE_TARGET};
@@ -26,7 +27,14 @@ const MAPPED_KEYS: [(MappedKey, &str); 11] = [
 
 #[component]
 pub fn SettingsScreen() -> Element {
-    let Ctx { mut config, .. } = use_ctx();
+    let Ctx {
+        mut config,
+        storage,
+        dat,
+        ..
+    } = use_ctx();
+    let db_flash = use_signal(|| Option::<Flash>::None);
+    let dat_names = dat.read().as_ref().map(|d| d.len()).unwrap_or(0);
 
     // Apply captured bindings. The Config is the source of truth; the
     // shell's sync effect mirrors it into the runtime's mapping.
@@ -151,6 +159,34 @@ pub fn SettingsScreen() -> Element {
                 class: "btn",
                 onclick: move |_| config.with_mut(|c| c.mapping = Default::default()),
                 "Reset to defaults"
+            }
+        }
+        section { class: "card",
+            h2 { "Game database" }
+            div { class: "field",
+                label { "No-Intro names" }
+                span { class: "status", "{dat_names}" }
+                button {
+                    class: "btn",
+                    onclick: move |_| {
+                        let storage = storage.read().clone().flatten();
+                        async move {
+                            let mut dat = dat;
+                            let Some(storage) = storage else { return };
+                            match crate::nointro::fetch_gba_dat(&storage).await {
+                                Ok(_) => flash(db_flash, "Updated!", true, 2500),
+                                Err(e) => flash(db_flash, format!("update failed: {e:#}"), false, 5000),
+                            }
+                            dat.restart();
+                        }
+                    },
+                    if let Some(f) = db_flash.read().clone() {
+                        FlashText { flash: f }
+                    } else {
+                        icons::RefreshCw {}
+                        "Update database"
+                    }
+                }
             }
         }
     }

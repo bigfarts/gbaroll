@@ -12,7 +12,7 @@ use crate::storage;
 /// One inline feedback message: `ok` renders green with a check,
 /// otherwise the danger tone.
 #[derive(Clone, PartialEq)]
-struct Flash {
+pub(crate) struct Flash {
     text: String,
     ok: bool,
 }
@@ -20,7 +20,7 @@ struct Flash {
 /// Show a message in an inline feedback slot, clearing it after `ms`
 /// unless something newer landed meanwhile. Feedback lives next to the
 /// control that produced it — there is no global notice bar.
-fn flash(mut slot: Signal<Option<Flash>>, text: impl Into<String>, ok: bool, ms: u32) {
+pub(crate) fn flash(mut slot: Signal<Option<Flash>>, text: impl Into<String>, ok: bool, ms: u32) {
     let text = text.into();
     slot.set(Some(Flash {
         text: text.clone(),
@@ -34,9 +34,38 @@ fn flash(mut slot: Signal<Option<Flash>>, text: impl Into<String>, ok: bool, ms:
     });
 }
 
+/// The two import feedback slots — global so the shell-level drop
+/// handler (the whole Play area is one drop target) can flash the
+/// side(s) that actually received something.
+pub(crate) static ROM_IMPORT_FLASH: GlobalSignal<Option<Flash>> = Signal::global(|| None);
+pub(crate) static SAVE_IMPORT_FLASH: GlobalSignal<Option<Flash>> = Signal::global(|| None);
+
+/// Flash a drop's outcome onto whichever side(s) it landed: ROMs on
+/// the library, saves on the saves pane, skips reported on the library
+/// side unless only saves imported.
+pub(crate) fn import_flashes(roms: u32, saves: u32, skipped: u32) {
+    let skips_on_saves = roms == 0 && saves > 0;
+    if roms > 0 || (skipped > 0 && !skips_on_saves) {
+        let msg = if skipped == 0 {
+            format!("Imported {roms}!")
+        } else {
+            format!("Imported {roms}, skipped {skipped}")
+        };
+        flash(ROM_IMPORT_FLASH.signal(), msg, skipped == 0, 3000);
+    }
+    if saves > 0 {
+        let msg = if skips_on_saves && skipped > 0 {
+            format!("Imported {saves}, skipped {skipped}")
+        } else {
+            format!("Imported {saves}!")
+        };
+        flash(SAVE_IMPORT_FLASH.signal(), msg, !(skips_on_saves && skipped > 0), 3000);
+    }
+}
+
 /// The rendered form of a [`Flash`].
 #[component]
-fn FlashText(flash: Flash) -> Element {
+pub(crate) fn FlashText(flash: Flash) -> Element {
     rsx! {
         span { class: if flash.ok { "flash-ok" } else { "link-notice" },
             if flash.ok {
@@ -72,7 +101,6 @@ pub fn PlayScreen() -> Element {
         mut config,
         mut library_rev,
         storage: storage_res,
-        dat,
         library,
         mut selected_save,
         ..
@@ -85,12 +113,11 @@ pub fn PlayScreen() -> Element {
     // pick is remembered across loads.
     let mut selected_game = use_signal(|| config.peek().last_game);
     // Inline action feedback slots.
-    let rom_import_flash = use_signal(|| Option::<Flash>::None);
-    let save_import_flash = use_signal(|| Option::<Flash>::None);
+    let rom_import_flash = ROM_IMPORT_FLASH.signal();
+    let save_import_flash = SAVE_IMPORT_FLASH.signal();
     let library_flash = use_signal(|| Option::<Flash>::None);
     let save_flash = use_signal(|| Option::<Flash>::None);
     let launch_flash = use_signal(|| Option::<Flash>::None);
-    let db_flash = use_signal(|| Option::<Flash>::None);
 
     // The remembered pick restores its matching save once the library
     // arrives (only if nothing else was chosen yet).
@@ -127,7 +154,6 @@ pub fn PlayScreen() -> Element {
         _ => (false, Vec::new(), Vec::new()),
     };
     let opfs_down = matches!(storage_res.read().as_ref(), Some(None));
-    let dat_names = dat.read().as_ref().map(|d| d.len()).unwrap_or(0);
 
     let needle = search.read().to_ascii_lowercase();
     let filtered: Vec<RomInfo> = roms
@@ -140,11 +166,6 @@ pub fn PlayScreen() -> Element {
         })
         .cloned()
         .collect();
-    let count = match roms.len() {
-        1 => "1 game".to_string(),
-        n => format!("{n} games"),
-    };
-
     let save_needle = save_search.read().to_ascii_lowercase();
     let filtered_saves: Vec<String> = saves
         .iter()
@@ -155,62 +176,20 @@ pub fn PlayScreen() -> Element {
     let selected_info: Option<RomInfo> = selected_game
         .read()
         .and_then(|crc| roms.iter().find(|r| r.crc32 == crc).cloned());
-    let launch_caption = match &selected_info {
-        Some(info) => format!(
-            "{} · {}",
-            info.display_name(),
-            selected_save.read().as_deref().unwrap_or("fresh save")
-        ),
-        None => "Pick a game to play.".to_string(),
-    };
 
     rsx! {
         section { class: "card",
             div { class: "card-head",
                 div {
                     h2 { "Game library" }
-                    p { class: "sub", "Step 1: pick a game · {count}" }
-                }
-                label {
-                    class: "btn file-btn",
-                    // While flashing, the whole button wears the
-                    // result's tone instead of fighting the primary
-                    // blue.
-                    class: if rom_import_flash.read().is_none() { "primary" },
-                    class: if rom_import_flash.read().as_ref().is_some_and(|f| f.ok) { "success" },
-                    class: if rom_import_flash.read().as_ref().is_some_and(|f| !f.ok) { "danger" },
-                    if let Some(f) = rom_import_flash.read().clone() {
-                        FlashText { flash: f }
-                    } else {
-                        icons::Upload {}
-                        "Import ROMs…"
-                    }
-                    input {
-                        r#type: "file",
-                        accept: ".gba,.agb,.srl",
-                        multiple: true,
-                        onchange: move |evt| {
-                            let storage = storage_res.read().clone().flatten();
-                            async move {
-                                let Some(storage) = storage else { return };
-                                let (r, _, skipped) =
-                                    crate::web::import_files(&storage, evt.files()).await;
-                                let msg = if skipped == 0 {
-                                    format!("Imported {r}!")
-                                } else {
-                                    format!("Imported {r}, skipped {skipped}")
-                                };
-                                flash(rom_import_flash, msg, skipped == 0, 3000);
-                                *library_rev.write() += 1;
-                            }
-                        },
-                    }
                 }
             }
             input {
                 class: "search",
                 placeholder: "Search by title or code…",
                 value: "{search}",
+                spellcheck: "false",
+                autocomplete: "off",
                 oninput: move |evt: FormEvent| search.set(evt.value()),
             }
             if let Some(f) = library_flash.read().clone() {
@@ -220,18 +199,52 @@ pub fn PlayScreen() -> Element {
                 div { class: "empty",
                     p { "This browser doesn't offer origin-private storage; the library is unavailable." }
                 }
-            } else if !scanned {
-                div { class: "empty", p { "Scanning the library…" } }
-            } else if filtered.is_empty() {
-                div { class: "empty",
-                    icons::Gamepad2 {}
-                    p { if roms.is_empty() { "No games yet" } else { "No games match your search" } }
-                    p { class: "sub",
-                        if roms.is_empty() { "Import .gba files to get started." } else { "Try a title or game code." }
-                    }
-                }
             } else {
                 div { class: "rom-list",
+                    // The importer leads the list as a ghost row; while
+                    // flashing it wears the result's tone.
+                    label {
+                        class: "pick-row ghost-add file-btn",
+                        class: if rom_import_flash.read().as_ref().is_some_and(|f| f.ok) { "success" },
+                        class: if rom_import_flash.read().as_ref().is_some_and(|f| !f.ok) { "danger" },
+                        if let Some(f) = rom_import_flash.read().clone() {
+                            FlashText { flash: f }
+                        } else {
+                            icons::Upload {}
+                            "Import ROMs…"
+                        }
+                        input {
+                            r#type: "file",
+                            accept: ".gba,.agb,.srl",
+                            multiple: true,
+                            onchange: move |evt| {
+                                let storage = storage_res.read().clone().flatten();
+                                async move {
+                                    let Some(storage) = storage else { return };
+                                    let (r, _, skipped) =
+                                        crate::web::import_files(&storage, evt.files()).await;
+                                    let msg = if skipped == 0 {
+                                        format!("Imported {r}!")
+                                    } else {
+                                        format!("Imported {r}, skipped {skipped}")
+                                    };
+                                    flash(rom_import_flash, msg, skipped == 0, 3000);
+                                    *library_rev.write() += 1;
+                                }
+                            },
+                        }
+                    }
+                    if !scanned {
+                        div { class: "empty", p { "Scanning the library…" } }
+                    } else if filtered.is_empty() {
+                        div { class: "empty",
+                            icons::Gamepad2 {}
+                            p { if roms.is_empty() { "No games yet" } else { "No games match your search" } }
+                            p { class: "sub",
+                                if roms.is_empty() { "Import .gba files to get started." } else { "Try a title or game code." }
+                            }
+                        }
+                    }
                     // One radio group: native click, Tab, and arrow-key
                     // behavior — the radio itself is visually hidden,
                     // the row is its label.
@@ -244,9 +257,9 @@ pub fn PlayScreen() -> Element {
                                     name: "game-pick",
                                     class: "pick-radio",
                                     checked: *selected_game.read() == Some(rom.crc32),
-                                    // Step 1: pick the game. Its matching
-                                    // save (same stem as the display name)
-                                    // comes along; no match = fresh save.
+                                    // Picking the game brings its matching
+                                    // save along (same stem as the display
+                                    // name); no match = fresh save.
                                     onchange: {
                                         let crc = rom.crc32;
                                         let display = rom.display_name().to_string();
@@ -329,11 +342,24 @@ pub fn PlayScreen() -> Element {
             div { class: "card-head",
                 div {
                     h2 { "Save data" }
-                    p { class: "sub", "Step 2: the picked save applies to the game you start." }
                 }
+            }
+            input {
+                class: "search",
+                placeholder: "Search saves…",
+                value: "{save_search}",
+                spellcheck: "false",
+                autocomplete: "off",
+                oninput: move |evt: FormEvent| save_search.set(evt.value()),
+            }
+            if let Some(f) = save_flash.read().clone() {
+                p { class: "sub", FlashText { flash: f } }
+            }
+            div { class: "save-list",
+                // The importer leads the list as a ghost row; while
+                // flashing it wears the result's tone.
                 label {
-                    class: "btn file-btn",
-                    class: if save_import_flash.read().is_none() { "primary" },
+                    class: "pick-row ghost-add file-btn",
                     class: if save_import_flash.read().as_ref().is_some_and(|f| f.ok) { "success" },
                     class: if save_import_flash.read().as_ref().is_some_and(|f| !f.ok) { "danger" },
                     if let Some(f) = save_import_flash.read().clone() {
@@ -363,17 +389,6 @@ pub fn PlayScreen() -> Element {
                         },
                     }
                 }
-            }
-            input {
-                class: "search",
-                placeholder: "Search saves…",
-                value: "{save_search}",
-                oninput: move |evt: FormEvent| save_search.set(evt.value()),
-            }
-            if let Some(f) = save_flash.read().clone() {
-                p { class: "sub", FlashText { flash: f } }
-            }
-            div { class: "save-list",
                 // The same radio-group widget as the game library; a
                 // fresh save is its own row rather than a dropdown
                 // special case.
@@ -399,6 +414,8 @@ pub fn PlayScreen() -> Element {
                                 input {
                                     class: "rename",
                                     value: "{rename_value}",
+                                    spellcheck: "false",
+                                    autocomplete: "off",
                                     onclick: move |evt: MouseEvent| evt.stop_propagation(),
                                     oninput: move |evt: FormEvent| rename_value.set(evt.value()),
                                 }
@@ -571,8 +588,12 @@ pub fn PlayScreen() -> Element {
                 }
             }
         }
-        // Step 3: the launch bar, grayed out until a game is picked.
+        // The footer: just Play, right-aligned (grayed out until a game
+        // is picked). Launch failures flash in transiently beside it.
         div { class: "launch-bar",
+                if let Some(f) = launch_flash.read().clone() {
+                    FlashText { flash: f }
+                }
                 button {
                     class: "btn primary launch",
                     disabled: selected_info.is_none(),
@@ -620,36 +641,6 @@ pub fn PlayScreen() -> Element {
                     icons::Play {}
                     "Play"
                 }
-                // Launch problems land here, in the caption's spot.
-                if let Some(f) = launch_flash.read().clone() {
-                    FlashText { flash: f }
-                } else {
-                    span { class: "sub", "{launch_caption}" }
-                }
-        }
-        div { class: "dev-corner",
-            span { "Game database: {dat_names} No-Intro name(s)" }
-            button {
-                class: "btn ghost",
-                onclick: move |_| {
-                    let storage = storage_res.read().clone().flatten();
-                    async move {
-                        let mut dat = dat;
-                        let Some(storage) = storage else { return };
-                        match crate::nointro::fetch_gba_dat(&storage).await {
-                            Ok(_) => flash(db_flash, "Updated!", true, 2500),
-                            Err(e) => flash(db_flash, format!("update failed: {e:#}"), false, 5000),
-                        }
-                        dat.restart();
-                    }
-                },
-                if let Some(f) = db_flash.read().clone() {
-                    FlashText { flash: f }
-                } else {
-                    icons::RefreshCw {}
-                    "Update game database"
-                }
-            }
         }
     }
 }
