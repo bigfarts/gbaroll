@@ -101,10 +101,33 @@ pub fn normalized_file_name(info: &RomInfo) -> String {
     format!("{} ({:08x}).gba", code, info.crc32)
 }
 
-/// Parse the header of an imported ROM. Also the import-time validator.
+/// The largest real GBA cartridge (32 MiB).
+pub const MAX_ROM_SIZE: usize = 32 * 1024 * 1024;
+
+/// Parse the header of an imported ROM. Also the import-time validator:
+/// the cartridge header self-identifies with a fixed byte and a
+/// checksum over 0xA0..=0xBC — the BIOS refuses carts without them, and
+/// so do we. This is what keeps a mis-picked zip (or whatever else a
+/// phone's file picker hands over) out of the library.
 pub fn rom_info(file_name: &str, bytes: &[u8]) -> anyhow::Result<RomInfo> {
     if bytes.len() < 0xc0 {
         anyhow::bail!("too small to be a GBA ROM");
+    }
+    if bytes.len() > MAX_ROM_SIZE {
+        anyhow::bail!(
+            "{} MiB is larger than any GBA cartridge",
+            bytes.len() / (1024 * 1024)
+        );
+    }
+    if bytes[0xb2] != 0x96 {
+        anyhow::bail!("not a GBA ROM (missing the header's fixed byte)");
+    }
+    let checksum = bytes[0xa0..=0xbc]
+        .iter()
+        .fold(0u8, |acc, b| acc.wrapping_sub(*b))
+        .wrapping_sub(0x19);
+    if checksum != bytes[0xbd] {
+        anyhow::bail!("not a GBA ROM (bad header checksum)");
     }
     Ok(RomInfo {
         file_name: file_name.to_owned(),

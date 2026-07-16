@@ -98,6 +98,18 @@ pub async fn import_files(storage: &Storage, files: Vec<dioxus::html::FileData>)
                     skipped += 1;
                 }
             }
+        } else if let Ok(info) = library::rom_info(&name, &bytes) {
+            // Unknown extension but the content passes the cartridge
+            // header check: still a ROM. iOS's picker is fond of
+            // handing files over with mangled names.
+            let stored = library::normalized_file_name(&info);
+            match storage::write(storage.roms(), &stored, &bytes).await {
+                Ok(()) => roms += 1,
+                Err(e) => {
+                    log::error!("couldn't import {name}: {e}");
+                    skipped += 1;
+                }
+            }
         } else {
             log::warn!("not importing {name}: unrecognized extension");
             skipped += 1;
