@@ -65,10 +65,8 @@ fn start_lobby(ctx: &Ctx, mode: LobbyMode) {
     if LOBBY_UI.peek().is_some() {
         return;
     }
-    let (server_url, nick) = {
-        let config = ctx.config.read();
-        (config.signaling_server.clone(), config.nick.clone())
-    };
+    let server_url = crate::config::signaling_server();
+    let nick = ctx.config.read().nick.clone();
     let (rom_crc32, rom_title) = {
         let rt = ctx.runtime.borrow();
         let Some(crc) = rt.descriptor().and_then(|d| d.rom_crc32) else {

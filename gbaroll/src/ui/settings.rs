@@ -51,7 +51,7 @@ pub fn SettingsScreen() -> Element {
 
     let capture_target = *CAPTURE_TARGET.read();
 
-    let (server, volume_pct, integer_scaling, rows) = {
+    let (volume_pct, integer_scaling, rows) = {
         let cfg = config.read();
         let rows: Vec<(MappedKey, &'static str, Vec<(DescribeKind, String)>)> = MAPPED_KEYS
             .iter()
@@ -64,7 +64,6 @@ pub fn SettingsScreen() -> Element {
             })
             .collect();
         (
-            cfg.signaling_server.clone(),
             (cfg.volume * 100.0).round() as u32,
             cfg.integer_scaling,
             rows,
@@ -72,21 +71,6 @@ pub fn SettingsScreen() -> Element {
     };
 
     rsx! {
-        section { class: "card",
-            h2 { "Netplay" }
-            div { class: "field",
-                label { "Signaling server" }
-                input {
-                    class: "wide",
-                    value: "{server}",
-                    placeholder: "ws://host:1984",
-                    oninput: move |evt: FormEvent| {
-                        config.with_mut(|c| c.signaling_server = evt.value())
-                    },
-                }
-            }
-            p { class: "sub", "Rooms are created and joined through this server." }
-        }
         section { class: "card",
             h2 { "Video / audio" }
             div { class: "field",

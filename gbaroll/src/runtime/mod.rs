@@ -370,6 +370,8 @@ impl Runtime {
                 Ok::<_, mgba::Error>(crate::net::protocol::BootBlob {
                     state,
                     save: link.export_save(0),
+                    // Only the host's survives, as the link's RTC seed.
+                    clock_unix_micros: (js_sys::Date::now() * 1000.0) as u64,
                 })
             })
             .ok_or_else(|| anyhow::anyhow!("machine unavailable"))??;

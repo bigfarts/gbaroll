@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Bumped on any incompatible change to the peer protocol.
-pub const NET_VERSION: u32 = 2;
+pub const NET_VERSION: u32 = 3;
 
 /// Rollback horizon: how far ahead of a missing input the streams will
 /// buffer before declaring the peer unrecoverable (~10s at 60fps).
@@ -109,6 +109,11 @@ pub struct BootBlob {
     /// SRAM/flash image at capture time (core states don't carry
     /// savedata).
     pub save: Option<Vec<u8>>,
+    /// The capturing side's wall clock. Every side ships one, but only
+    /// the host's (player 0) seeds the link's shared RTC — clock
+    /// agreement is part of the peer protocol, not the signaling
+    /// server's business.
+    pub clock_unix_micros: u64,
 }
 
 /// Chunk size for the boot exchange, comfortably under the negotiated
@@ -165,6 +170,7 @@ mod tests {
         let blob = BootBlob {
             state: vec![0u8; 400 * 1024],
             save: Some(vec![0xffu8; 32 * 1024]),
+            clock_unix_micros: 1_700_000_000_000_000,
         };
         let encoded = blob.encode().unwrap();
         assert!(encoded.len() < blob.state.len() / 4);

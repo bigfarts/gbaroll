@@ -109,6 +109,13 @@ code {
     color: var(--bg-deep);
 }
 
+/* A button mid-success-flash: the whole control wears the result. */
+.btn.success {
+    background: rgba(158, 206, 106, 0.12);
+    border-color: #9ece6a;
+    color: #9ece6a;
+}
+
 .btn.ghost {
     background: transparent;
     border-color: transparent;
@@ -290,25 +297,6 @@ main.settings-main {
 
 .identity input {
     width: 140px;
-}
-
-/* Informational, not an error — accent-tinted, not red. */
-.notice {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    background: rgba(122, 162, 247, 0.1);
-    border: 1px solid var(--accent);
-    border-radius: 8px;
-    padding: 8px 8px 8px 12px;
-    margin-bottom: 14px;
-    font-size: 13px;
-}
-
-.notice span {
-    flex: 1;
-    min-width: 0;
-    overflow-wrap: anywhere;
 }
 
 /* --- cards ---------------------------------------------------------- */
@@ -874,6 +862,19 @@ main.settings-main {
     margin-top: 3px;
 }
 
+/* The slider with its suggest-from-ping wand alongside. */
+.delay-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.delay-row input[type="range"] {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+}
+
 .metric-value {
     min-width: 58px;
     text-align: right;
@@ -908,6 +909,14 @@ main.settings-main {
 .link-notice {
     color: var(--danger);
     font-size: 12px;
+}
+
+/* Inline success feedback: green, with its checkmark. */
+.flash-ok {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: #9ece6a;
 }
 
 /* ---- cable panel, offline body ---- */

@@ -8,13 +8,24 @@ use crate::platform::input::Mapping;
 
 const KEY: &str = "gbaroll.config";
 
+/// The signaling server every build points at; override per page load
+/// with `?signaling_server_addr=…` (there is no settings knob).
+pub const DEFAULT_SIGNALING: &str = "wss://gbaroll-signaling.farts.fyi";
+
+/// The signaling server URL for this page load.
+pub fn signaling_server() -> String {
+    web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .and_then(|s| web_sys::UrlSearchParams::new_with_str(&s).ok())
+        .and_then(|p| p.get("signaling_server_addr"))
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_SIGNALING.to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub nick: String,
-    /// WebSocket URL of the gbaroll signaling server (which also hands
-    /// out the ICE servers for the mesh).
-    pub signaling_server: String,
     /// How many ticks behind the input frontier to present (the input
     /// delay / rollback depth tradeoff), adjustable live in-session.
     pub present_delay: u32,
@@ -22,6 +33,8 @@ pub struct Config {
     pub volume: f32,
     /// Snap the game image to integer multiples of 240x160.
     pub integer_scaling: bool,
+    /// The library's last-picked game (CRC32), restored on load.
+    pub last_game: Option<u32>,
     pub mapping: Mapping,
 }
 
@@ -29,10 +42,10 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             nick: "player".to_string(),
-            signaling_server: "ws://127.0.0.1:1984".to_string(),
             present_delay: 2,
             volume: 1.0,
             integer_scaling: true,
+            last_game: None,
             mapping: Mapping::default(),
         }
     }

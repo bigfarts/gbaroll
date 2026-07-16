@@ -1,12 +1,51 @@
-//! The Play tab: the OPFS ROM library (import, search, per-row play
-//! and delete), the save picker applied to the next boot, and a
-//! developer corner for the game database and the test ROM.
+//! The Play tab: pick a game, pick a save, hit Play. The library and
+//! the saves are twin OPFS-backed pick-lists with import, search,
+//! rename (saves), and delete; action feedback flashes inline next to
+//! whatever triggered it.
 
 use dioxus::prelude::*;
 
 use super::{icons, use_ctx, Ctx};
 use crate::library::{self, RomInfo};
 use crate::storage;
+
+/// One inline feedback message: `ok` renders green with a check,
+/// otherwise the danger tone.
+#[derive(Clone, PartialEq)]
+struct Flash {
+    text: String,
+    ok: bool,
+}
+
+/// Show a message in an inline feedback slot, clearing it after `ms`
+/// unless something newer landed meanwhile. Feedback lives next to the
+/// control that produced it — there is no global notice bar.
+fn flash(mut slot: Signal<Option<Flash>>, text: impl Into<String>, ok: bool, ms: u32) {
+    let text = text.into();
+    slot.set(Some(Flash {
+        text: text.clone(),
+        ok,
+    }));
+    spawn(async move {
+        gloo_timers::future::TimeoutFuture::new(ms).await;
+        if slot.peek().as_ref().is_some_and(|f| f.text == text) {
+            slot.set(None);
+        }
+    });
+}
+
+/// The rendered form of a [`Flash`].
+#[component]
+fn FlashText(flash: Flash) -> Element {
+    rsx! {
+        span { class: if flash.ok { "flash-ok" } else { "link-notice" },
+            if flash.ok {
+                icons::Check {}
+            }
+            "{flash.text}"
+        }
+    }
+}
 
 /// The save the picker auto-selects for a game: the one whose stem is
 /// the game's display name (the write-back default).
@@ -30,7 +69,7 @@ fn ext_of(name: &str) -> &str {
 pub fn PlayScreen() -> Element {
     let Ctx {
         runtime,
-        mut notice,
+        mut config,
         mut library_rev,
         storage: storage_res,
         dat,
@@ -42,8 +81,39 @@ pub fn PlayScreen() -> Element {
     let mut search = use_signal(String::new);
     let mut save_search = use_signal(String::new);
     // Launching is two picks and a click: pick a game (auto-picks its
-    // matching save), adjust the save if wanted, hit Play.
-    let mut selected_game = use_signal(|| Option::<u32>::None);
+    // matching save), adjust the save if wanted, hit Play. The last
+    // pick is remembered across loads.
+    let mut selected_game = use_signal(|| config.peek().last_game);
+    // Inline action feedback slots.
+    let rom_import_flash = use_signal(|| Option::<Flash>::None);
+    let save_import_flash = use_signal(|| Option::<Flash>::None);
+    let library_flash = use_signal(|| Option::<Flash>::None);
+    let save_flash = use_signal(|| Option::<Flash>::None);
+    let launch_flash = use_signal(|| Option::<Flash>::None);
+    let db_flash = use_signal(|| Option::<Flash>::None);
+
+    // The remembered pick restores its matching save once the library
+    // arrives (only if nothing else was chosen yet).
+    let mut restored = use_signal(|| false);
+    use_effect(move || {
+        if *restored.peek() {
+            return;
+        }
+        let guard = library.read();
+        let Some(Some((lib, saves))) = guard.as_ref() else {
+            return;
+        };
+        restored.set(true);
+        if selected_save.peek().is_none() {
+            if let Some(info) =
+                (*selected_game.peek()).and_then(|crc| lib.by_crc32(crc))
+            {
+                if let Some(matched) = matching_save(saves, info.display_name()) {
+                    selected_save.set(Some(matched));
+                }
+            }
+        }
+    });
     // Deleting a ROM or save is irreversible, so it takes two clicks:
     // arm on the row, then confirm in place.
     let mut pending_delete = use_signal(|| Option::<String>::None);
@@ -99,13 +169,22 @@ pub fn PlayScreen() -> Element {
             div { class: "card-head",
                 div {
                     h2 { "Game library" }
-                    p { class: "sub",
-                        "{count} · everything stays in this browser (origin-private storage) — nothing uploads"
-                    }
+                    p { class: "sub", "Step 1: pick a game · {count}" }
                 }
-                label { class: "btn primary file-btn",
-                    icons::Upload {}
-                    "Import ROMs…"
+                label {
+                    class: "btn file-btn",
+                    // While flashing, the whole button wears the
+                    // result's tone instead of fighting the primary
+                    // blue.
+                    class: if rom_import_flash.read().is_none() { "primary" },
+                    class: if rom_import_flash.read().as_ref().is_some_and(|f| f.ok) { "success" },
+                    class: if rom_import_flash.read().as_ref().is_some_and(|f| !f.ok) { "danger" },
+                    if let Some(f) = rom_import_flash.read().clone() {
+                        FlashText { flash: f }
+                    } else {
+                        icons::Upload {}
+                        "Import ROMs…"
+                    }
                     input {
                         r#type: "file",
                         accept: ".gba,.agb,.srl",
@@ -116,9 +195,12 @@ pub fn PlayScreen() -> Element {
                                 let Some(storage) = storage else { return };
                                 let (r, _, skipped) =
                                     crate::web::import_files(&storage, evt.files()).await;
-                                notice.set(Some(format!(
-                                    "Imported {r} ROM(s), skipped {skipped}."
-                                )));
+                                let msg = if skipped == 0 {
+                                    format!("Imported {r}!")
+                                } else {
+                                    format!("Imported {r}, skipped {skipped}")
+                                };
+                                flash(rom_import_flash, msg, skipped == 0, 3000);
                                 *library_rev.write() += 1;
                             }
                         },
@@ -130,6 +212,9 @@ pub fn PlayScreen() -> Element {
                 placeholder: "Search by title or code…",
                 value: "{search}",
                 oninput: move |evt: FormEvent| search.set(evt.value()),
+            }
+            if let Some(f) = library_flash.read().clone() {
+                p { class: "sub", FlashText { flash: f } }
             }
             if opfs_down {
                 div { class: "empty",
@@ -169,6 +254,8 @@ pub fn PlayScreen() -> Element {
                                         move |_| {
                                             selected_game.set(Some(crc));
                                             selected_save.set(matching_save(&saves, &display));
+                                            // Remembered for the next load.
+                                            config.with_mut(|c| c.last_game = Some(crc));
                                         }
                                     },
                                 }
@@ -196,9 +283,12 @@ pub fn PlayScreen() -> Element {
                                                     if let Err(e) =
                                                         storage::delete(storage.roms(), &file_name).await
                                                     {
-                                                        notice.set(Some(format!(
-                                                            "couldn't delete {file_name}: {e}"
-                                                        )));
+                                                        flash(
+                                                            library_flash,
+                                                            format!("couldn't delete {file_name}: {e}"),
+                                                            false,
+                                                            5000,
+                                                        );
                                                     }
                                                     pending_delete.set(None);
                                                     *library_rev.write() += 1;
@@ -241,9 +331,17 @@ pub fn PlayScreen() -> Element {
                     h2 { "Save data" }
                     p { class: "sub", "Step 2: the picked save applies to the game you start." }
                 }
-                label { class: "btn primary file-btn",
-                    icons::Upload {}
-                    "Import saves…"
+                label {
+                    class: "btn file-btn",
+                    class: if save_import_flash.read().is_none() { "primary" },
+                    class: if save_import_flash.read().as_ref().is_some_and(|f| f.ok) { "success" },
+                    class: if save_import_flash.read().as_ref().is_some_and(|f| !f.ok) { "danger" },
+                    if let Some(f) = save_import_flash.read().clone() {
+                        FlashText { flash: f }
+                    } else {
+                        icons::Upload {}
+                        "Import saves…"
+                    }
                     input {
                         r#type: "file",
                         accept: ".sav,.sa1,.srm",
@@ -254,9 +352,12 @@ pub fn PlayScreen() -> Element {
                                 let Some(storage) = storage else { return };
                                 let (_, s, skipped) =
                                     crate::web::import_files(&storage, evt.files()).await;
-                                notice.set(Some(format!(
-                                    "Imported {s} save(s), skipped {skipped}."
-                                )));
+                                let msg = if skipped == 0 {
+                                    format!("Imported {s}!")
+                                } else {
+                                    format!("Imported {s}, skipped {skipped}")
+                                };
+                                flash(save_import_flash, msg, skipped == 0, 3000);
                                 *library_rev.write() += 1;
                             }
                         },
@@ -268,6 +369,9 @@ pub fn PlayScreen() -> Element {
                 placeholder: "Search saves…",
                 value: "{save_search}",
                 oninput: move |evt: FormEvent| save_search.set(evt.value()),
+            }
+            if let Some(f) = save_flash.read().clone() {
+                p { class: "sub", FlashText { flash: f } }
             }
             div { class: "save-list",
                 // The same radio-group widget as the game library; a
@@ -326,9 +430,12 @@ pub fn PlayScreen() -> Element {
                                                             selected_save.set(Some(to));
                                                         }
                                                     }
-                                                    Err(e) => notice.set(Some(format!(
-                                                        "couldn't rename {save}: {e}"
-                                                    ))),
+                                                    Err(e) => flash(
+                                                        save_flash,
+                                                        format!("couldn't rename {save}: {e}"),
+                                                        false,
+                                                        5000,
+                                                    ),
                                                 }
                                                 rename_target.set(None);
                                                 *library_rev.write() += 1;
@@ -364,9 +471,12 @@ pub fn PlayScreen() -> Element {
                                                 if let Err(e) =
                                                     storage::delete(storage.saves(), &save).await
                                                 {
-                                                    notice.set(Some(format!(
-                                                        "couldn't delete {save}: {e}"
-                                                    )));
+                                                    flash(
+                                                        save_flash,
+                                                        format!("couldn't delete {save}: {e}"),
+                                                        false,
+                                                        5000,
+                                                    );
                                                 } else if selected_save.read().as_deref()
                                                     == Some(save.as_str())
                                                 {
@@ -429,7 +539,12 @@ pub fn PlayScreen() -> Element {
                                                 let Some(storage) = storage else { return };
                                                 match storage::read(storage.saves(), &save).await {
                                                     Ok(Some(bytes)) => crate::web::download_bytes(&save, &bytes),
-                                                    _ => notice.set(Some(format!("couldn't read {save}"))),
+                                                    _ => flash(
+                                                        save_flash,
+                                                        format!("couldn't read {save}"),
+                                                        false,
+                                                        5000,
+                                                    ),
                                                 }
                                             }
                                         }
@@ -474,7 +589,7 @@ pub fn PlayScreen() -> Element {
                                 let bytes = match library::read_rom(&storage, &info).await {
                                     Ok(b) => b,
                                     Err(e) => {
-                                        notice.set(Some(format!("{e:#}")));
+                                        flash(launch_flash, format!("{e:#}"), false, 6000);
                                         return;
                                     }
                                 };
@@ -492,7 +607,12 @@ pub fn PlayScreen() -> Element {
                                 if let Err(e) =
                                     crate::web::boot(runtime, bytes, save, Some(save_file)).await
                                 {
-                                    notice.set(Some(format!("couldn't start session: {e:#}")));
+                                    flash(
+                                        launch_flash,
+                                        format!("couldn't start session: {e:#}"),
+                                        false,
+                                        6000,
+                                    );
                                 }
                             });
                         }
@@ -500,7 +620,12 @@ pub fn PlayScreen() -> Element {
                     icons::Play {}
                     "Play"
                 }
-                span { class: "sub", "{launch_caption}" }
+                // Launch problems land here, in the caption's spot.
+                if let Some(f) = launch_flash.read().clone() {
+                    FlashText { flash: f }
+                } else {
+                    span { class: "sub", "{launch_caption}" }
+                }
         }
         div { class: "dev-corner",
             span { "Game database: {dat_names} No-Intro name(s)" }
@@ -512,16 +637,18 @@ pub fn PlayScreen() -> Element {
                         let mut dat = dat;
                         let Some(storage) = storage else { return };
                         match crate::nointro::fetch_gba_dat(&storage).await {
-                            Ok(n) => notice.set(Some(format!(
-                                "Downloaded the No-Intro database ({n} names)."
-                            ))),
-                            Err(e) => notice.set(Some(format!("database download failed: {e:#}"))),
+                            Ok(_) => flash(db_flash, "Updated!", true, 2500),
+                            Err(e) => flash(db_flash, format!("update failed: {e:#}"), false, 5000),
                         }
                         dat.restart();
                     }
                 },
-                icons::RefreshCw {}
-                "Update game database"
+                if let Some(f) = db_flash.read().clone() {
+                    FlashText { flash: f }
+                } else {
+                    icons::RefreshCw {}
+                    "Update game database"
+                }
             }
         }
     }

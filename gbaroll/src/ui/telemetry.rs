@@ -619,24 +619,27 @@ fn DelayControl() -> Element {
                 span { "Input delay" }
                 span { class: "metric-value mono", "{present_delay}" }
             }
-            input {
-                r#type: "range",
-                min: "0",
-                max: "10",
-                value: "{present_delay}",
-                oninput: {
-                    let apply = apply.clone();
-                    move |evt: FormEvent| {
-                        if let Ok(v) = evt.value().parse::<u32>() {
-                            apply(v);
+            div { class: "delay-row",
+                input {
+                    r#type: "range",
+                    min: "0",
+                    max: "10",
+                    value: "{present_delay}",
+                    oninput: {
+                        let apply = apply.clone();
+                        move |evt: FormEvent| {
+                            if let Ok(v) = evt.value().parse::<u32>() {
+                                apply(v);
+                            }
                         }
-                    }
-                },
-            }
-            button {
-                class: "btn ghost",
-                onclick: move |_| apply(suggest),
-                "Suggest {suggest} from ping"
+                    },
+                }
+                button {
+                    class: "btn ghost icon-btn",
+                    title: "Suggest {suggest} from ping",
+                    onclick: move |_| apply(suggest),
+                    icons::Wand {}
+                }
             }
         }
     }

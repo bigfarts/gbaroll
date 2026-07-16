@@ -37,8 +37,6 @@ enum Tab {
 struct Ctx {
     runtime: Rc<RefCell<Runtime>>,
     config: Signal<Config>,
-    /// The notice bar's message (errors/status); `None` hides the bar.
-    notice: Signal<Option<String>>,
     /// Bumped to rescan the library after imports and deletes.
     library_rev: Signal<u64>,
     /// `Some(None)` when the browser has no OPFS.

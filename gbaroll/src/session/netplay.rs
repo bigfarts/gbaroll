@@ -164,25 +164,34 @@ pub fn start(args: NetplayArgs) -> anyhow::Result<NetplaySession> {
         rom_crc32: Some(bundle.players[local_player].rom_crc32),
     };
 
-    let rtc = std::time::UNIX_EPOCH + std::time::Duration::from_micros(bundle.clock_unix_micros);
     let local_rom = args.roms[local_player].clone();
     // The cable plugs in: every peer rebuilds the identical link from the
     // exchanged captures (the local side included — our own machine loads
     // from its serialized capture too, so everyone reconstructs the same
     // bytes).
+    let blobs = bundle
+        .boots
+        .iter()
+        .map(|boot| BootBlob::decode(boot))
+        .collect::<Result<Vec<_>, _>>()?;
+    // The shared RTC seed is the host's clock, agreed over the peer
+    // protocol (it rides player 0's boot payload) rather than taken
+    // from the signaling server.
+    let clock_unix_micros = blobs
+        .first()
+        .map(|b| b.clock_unix_micros)
+        .ok_or_else(|| anyhow::anyhow!("no boot payloads"))?;
+    let rtc = std::time::UNIX_EPOCH + std::time::Duration::from_micros(clock_unix_micros);
     let sides = args
         .roms
         .into_iter()
-        .zip(bundle.boots.iter())
-        .map(|(rom, boot)| {
-            let blob = BootBlob::decode(boot)?;
-            anyhow::Ok(BootSide {
-                rom,
-                save: blob.save,
-                state: blob.state,
-            })
+        .zip(blobs)
+        .map(|(rom, blob)| BootSide {
+            rom,
+            save: blob.save,
+            state: blob.state,
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Vec<_>>();
     let mut link = Link::from_states(sides, Some(rtc))?;
     prepare_audio_buffers(&mut link);
 
@@ -193,7 +202,7 @@ pub fn start(args: NetplayArgs) -> anyhow::Result<NetplaySession> {
         shared: shared.clone(),
         local_player,
         local_rom,
-        clock_unix_micros: bundle.clock_unix_micros,
+        clock_unix_micros,
         session,
         throttler: Throttler::new(),
         event_rx,

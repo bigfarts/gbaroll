@@ -1,6 +1,6 @@
 //! The root component: global state wiring (config, runtime, OPFS
-//! resources), the session-view swap, and the tab shell with its
-//! notice bar.
+//! resources), the session-view swap, and the tab shell. Action
+//! feedback is inline with whatever triggered it, not a global bar.
 
 use dioxus::prelude::*;
 
@@ -17,7 +17,6 @@ const STYLE: Asset = asset!("/assets/style.css");
 pub fn App() -> Element {
     let config = use_hook(|| Signal::new(Config::load()));
     let runtime = use_hook(Runtime::install);
-    let notice = use_signal(|| Option::<String>::None);
     // Bumped to rescan the library after imports/deletes.
     let library_rev = use_signal(|| 0u64);
     let selected_save = use_signal(|| Option::<String>::None);
@@ -61,7 +60,6 @@ pub fn App() -> Element {
     use_context_provider(|| Ctx {
         runtime: runtime.clone(),
         config,
-        notice,
         library_rev,
         storage,
         dat,
@@ -114,11 +112,7 @@ pub fn App() -> Element {
 
 #[component]
 fn Shell() -> Element {
-    let Ctx {
-        mut notice,
-        mut config,
-        ..
-    } = use_ctx();
+    let Ctx { mut config, .. } = use_ctx();
     let mut tab = use_signal(Tab::default);
     let current = tab();
     let nick = config.read().nick.clone();
@@ -156,17 +150,6 @@ fn Shell() -> Element {
                         oninput: move |evt: FormEvent| {
                             config.with_mut(|c| c.nick = evt.value())
                         },
-                    }
-                }
-            }
-            if let Some(message) = notice.read().clone() {
-                div { class: "notice",
-                    span { "{message}" }
-                    button {
-                        class: "btn ghost icon-btn",
-                        title: "Dismiss",
-                        onclick: move |_| notice.set(None),
-                        icons::X {}
                     }
                 }
             }
