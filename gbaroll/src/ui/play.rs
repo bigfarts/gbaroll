@@ -205,7 +205,7 @@ pub fn PlayScreen() -> Element {
                                                 }
                                             }
                                         },
-                                        "Confirm"
+                                        "Delete"
                                     }
                                     button {
                                         class: "btn",
@@ -377,7 +377,7 @@ pub fn PlayScreen() -> Element {
                                             }
                                         }
                                     },
-                                    "Confirm"
+                                    "Delete"
                                 }
                                 button {
                                     class: "btn",
