@@ -202,9 +202,22 @@ kbd {
 }
 
 .tabs {
-    margin-left: auto;
     display: flex;
     gap: 6px;
+}
+
+/* The nickname field, top-right of the shell (identity travels with
+   the main page, not settings). */
+.identity {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--text-dim);
+}
+
+.identity input {
+    width: 140px;
 }
 
 .btn.tab {
@@ -352,6 +365,15 @@ kbd {
     color: var(--text);
 }
 
+.save-row .spacer {
+    flex: 1;
+}
+
+.save-row input.rename {
+    flex: 1;
+    min-width: 0;
+}
+
 .dev-corner {
     display: flex;
     align-items: center;
@@ -443,35 +465,6 @@ kbd {
     background: var(--bg-deep);
 }
 
-.session-header {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 8px 12px;
-    background: var(--bg);
-    border-bottom: 1px solid var(--border);
-}
-
-.session-title {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-}
-
-.session-title .game {
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.session-status {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
 .badge {
     font-size: 11px;
     padding: 2px 8px;
@@ -491,19 +484,31 @@ kbd {
     overflow: hidden;
 }
 
-/* 240x160 at a 3x backing store; pixels stay square and crisp. */
+/* Integer scaling: a 240x160 backing store shown at the largest whole
+   multiple that fits the window (CSS round() keeps this JS-free), so
+   nearest-neighbour stays perfectly square. */
 .stage canvas {
     image-rendering: pixelated;
-    width: 720px;
-    max-width: 100%;
+    width: max(240px, round(down, min(100vw, 100vh * 1.5), 240px));
     height: auto;
 }
 
-/* Integer scaling off: stretch to the container, still pixelated.
-   Clamped by the viewport height (minus the header) to keep the whole
-   image on screen. */
+/* Integer scaling off: fill the window, letterboxed. The backing store
+   is a 6x nearest-neighbour render, so the browser's bilinear pass to
+   the final size stays crisp without pixel shimmer. */
 .stage canvas.fit {
-    width: min(100%, calc((100vh - 50px) * 1.5));
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    image-rendering: auto;
+}
+
+/* With no header bar, "paused" floats over the stage instead. */
+.pause-badge {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 5;
 }
 
 /* --- overlays --------------------------------------------------------- */
@@ -586,6 +591,63 @@ kbd {
     gap: 7px;
     background: var(--surface);
     border: 1px solid var(--border);
+}
+
+/* ---- lobby roster ---- */
+
+.roster {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 10px 0;
+}
+
+.roster-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    background: var(--bg-deep);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+}
+
+.roster-ready {
+    display: inline-flex;
+    width: 1.2em;
+    color: var(--text-dim);
+}
+
+.roster-ready.ready {
+    color: #9ece6a;
+}
+
+.roster-name {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.roster-name .game-title {
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.you-badge {
+    margin-left: auto;
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+}
+
+.roster .link-notice {
+    margin-left: auto;
 }
 
 .tele-card {

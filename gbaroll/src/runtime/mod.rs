@@ -121,6 +121,9 @@ pub struct Runtime {
     /// RAII: unbinding returns the output to silence.
     audio_binding: Option<Binding>,
     presenter: Option<WebGlPresenter>,
+    /// The active canvas's context-loss hooks, removed when the canvas
+    /// detaches or is replaced (else every mount stacks another pair).
+    canvas_hooks: Option<CanvasHooks>,
     presented_rev: u64,
     clock: clock::TickClock,
     pub held: input::HeldState,
@@ -147,6 +150,12 @@ pub struct Runtime {
     _pumping: bool,
 }
 
+struct CanvasHooks {
+    canvas: web_sys::HtmlCanvasElement,
+    lost: Closure<dyn FnMut(web_sys::Event)>,
+    restored: Closure<dyn FnMut(web_sys::Event)>,
+}
+
 thread_local! {
     /// The app-lifetime runtime singleton, reachable from JS callbacks.
     static RUNTIME: RefCell<Option<Rc<RefCell<Runtime>>>> = const { RefCell::new(None) };
@@ -165,6 +174,7 @@ impl Runtime {
             audio_binder: LateBinder::new(),
             audio_binding: None,
             presenter: None,
+            canvas_hooks: None,
             presented_rev: 0,
             clock: clock::TickClock::new(),
             held: input::HeldState::default(),
@@ -184,6 +194,7 @@ impl Runtime {
         install_raf(Rc::downgrade(&runtime));
         install_keyboard(Rc::downgrade(&runtime));
         install_beforeunload(Rc::downgrade(&runtime));
+        install_focus_release(Rc::downgrade(&runtime));
         runtime
     }
 
@@ -196,6 +207,7 @@ impl Runtime {
     /// preventDefault'ed for the browser to restore the context, and
     /// `webglcontextrestored` rebuilds the pipeline on the same canvas.
     pub fn attach_canvas(&mut self, canvas: &web_sys::HtmlCanvasElement) {
+        self.drop_canvas_hooks();
         match WebGlPresenter::new(canvas) {
             Ok(p) => {
                 self.presenter = Some(p);
@@ -226,12 +238,28 @@ impl Runtime {
             "webglcontextrestored",
             restored.as_ref().unchecked_ref(),
         );
-        // Canvas-lifetime listeners; the canvas node dies with the view.
-        lost.forget();
-        restored.forget();
+        self.canvas_hooks = Some(CanvasHooks {
+            canvas: canvas.clone(),
+            lost,
+            restored,
+        });
+    }
+
+    fn drop_canvas_hooks(&mut self) {
+        if let Some(hooks) = self.canvas_hooks.take() {
+            let _ = hooks.canvas.remove_event_listener_with_callback(
+                "webglcontextlost",
+                hooks.lost.as_ref().unchecked_ref(),
+            );
+            let _ = hooks.canvas.remove_event_listener_with_callback(
+                "webglcontextrestored",
+                hooks.restored.as_ref().unchecked_ref(),
+            );
+        }
     }
 
     pub fn detach_canvas(&mut self) {
+        self.drop_canvas_hooks();
         self.presenter = None;
     }
 
@@ -258,7 +286,7 @@ impl Runtime {
             rtc,
         })?;
         self.save_file = save_file;
-        self.last_autosave_ms = js_sys::Date::now();
+        self.last_autosave_ms = performance_now();
         self.adopt_session(Session::Local(session));
         Ok(())
     }
@@ -533,7 +561,11 @@ impl Runtime {
         if let Some(session) = &mut self.session {
             let shared = session.shared().clone();
             let paused = shared.paused.load(std::sync::atomic::Ordering::Acquire);
-            if paused {
+            // A hidden tab keeps ticking only for netplay (the cable
+            // must hold while alt-tabbed). A hidden solo session idles
+            // instead of burning a core in the background forever.
+            let idle_hidden = session.kind() == SessionKind::Local && document_hidden();
+            if paused || idle_hidden {
                 shared.set_fps_target(0.0);
                 self.clock.reset();
             } else {
@@ -635,6 +667,22 @@ impl Runtime {
             }
         }
 
+        // Debug probe: wasm linear-memory pages (64KiB each). Linear
+        // memory only ever grows, so a steady climb here is the
+        // telltale of a leak long before the tab notices.
+        let _ = js_sys::Reflect::set(
+            &js_sys::global(),
+            &"gbarollWasmPages".into(),
+            &(core::arch::wasm32::memory_size::<0>() as f64).into(),
+        );
+        // Debug probe: whether fast-forward reads as held — a stuck
+        // modifier here once pinned background tabs at 3× CPU.
+        let _ = js_sys::Reflect::set(
+            &js_sys::global(),
+            &"gbarollSpeedUp".into(),
+            &self.mapping.speed_up_held(&self.held).into(),
+        );
+
         // Present + UI signal: only on the visible-path source.
         if source == PumpSource::Raf {
             if let (Some(presenter), Some(session)) = (&mut self.presenter, &self.session) {
@@ -657,6 +705,15 @@ impl Runtime {
 
 fn performance_now() -> f64 {
     web_sys::window().unwrap().performance().unwrap().now()
+}
+
+/// Covers both backgrounded tabs and fully-occluded windows (Chrome
+/// reports "hidden" for either; rAF is already stopped in both).
+fn document_hidden() -> bool {
+    web_sys::window()
+        .and_then(|w| w.document())
+        .map(|d| d.hidden())
+        .unwrap_or(false)
 }
 
 /// The cable-panel one-liner for an unplug that continued solo.
@@ -721,6 +778,41 @@ fn install_beforeunload(runtime: Weak<RefCell<Runtime>>) {
         .add_event_listener_with_callback("beforeunload", closure.as_ref().unchecked_ref())
         .expect("addEventListener");
     closure.forget();
+}
+
+/// Release held keyboard keys whenever focus or visibility leaves the
+/// tab: the matching keyup fires wherever the user went, so anything
+/// still held here would stay "down" forever — most damagingly a held
+/// fast-forward, which would keep a background tab at 3× CPU.
+fn install_focus_release(runtime: Weak<RefCell<Runtime>>) {
+    let window = web_sys::window().unwrap();
+    let document = window.document().unwrap();
+    let release = move || {
+        if let Some(rt) = runtime.upgrade() {
+            if let Ok(mut rt) = rt.try_borrow_mut() {
+                rt.held.release_keys();
+            }
+        }
+    };
+    {
+        let release = release.clone();
+        let closure: Closure<dyn FnMut(web_sys::Event)> = Closure::new(move |_| release());
+        window
+            .add_event_listener_with_callback("blur", closure.as_ref().unchecked_ref())
+            .expect("addEventListener");
+        closure.forget();
+    }
+    {
+        let closure: Closure<dyn FnMut(web_sys::Event)> = Closure::new(move |_| {
+            if document_hidden() {
+                release();
+            }
+        });
+        document
+            .add_event_listener_with_callback("visibilitychange", closure.as_ref().unchecked_ref())
+            .expect("addEventListener");
+        closure.forget();
+    }
 }
 
 fn install_keyboard(runtime: Weak<RefCell<Runtime>>) {

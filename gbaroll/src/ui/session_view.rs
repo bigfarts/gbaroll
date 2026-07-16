@@ -95,57 +95,26 @@ pub fn SessionView() -> Element {
     rsx! {
         document::Title { "{title} — gbaroll" }
         div { class: "session",
-            header { class: "session-header",
-                if running {
-                    button {
-                        class: "btn ghost",
-                        onclick: move |_| {
-                            let open = *MENU_OPEN.peek();
-                            *MENU_OPEN.write() = !open;
-                        },
-                        icons::Sliders {}
-                        "Menu"
-                        kbd { "esc" }
-                    }
-                }
-                div { class: "session-title",
-                    span { class: "game", "{title}" }
-                    span { class: "sub", "{caption}" }
-                }
-                div { class: "session-status",
-                    if paused {
-                        span { class: "badge", "Paused" }
-                    } else if !status.is_empty() {
-                        span { class: "sub", "{status}" }
-                    }
-                    if running {
-                        button {
-                            class: "btn ghost icon-btn",
-                            title: if paused { "Resume" } else { "Pause" },
-                            onclick: {
-                                let runtime = runtime.clone();
-                                move |_| runtime.borrow_mut().toggle_pause()
-                            },
-                            if paused {
-                                icons::Play {}
-                            } else {
-                                icons::Pause {}
-                            }
-                        }
-                    }
-                }
-            }
             div { class: "stage",
+                // Backing store per scaling mode: native 240x160 for
+                // integer mode (pixelated CSS upscale stays square), a
+                // 6x nearest-neighbour render for fit mode (the browser
+                // then bilinears it to the window — sharp, no shimmer).
                 canvas {
                     id: "framebuffer",
-                    width: "720",
-                    height: "480",
+                    width: if config.read().integer_scaling { "240" } else { "1440" },
+                    height: if config.read().integer_scaling { "160" } else { "960" },
                     class: if !config.read().integer_scaling { "fit" },
                 }
                 // The cable/telemetry overlay keeps its corner in every
                 // cable state; the menu and end overlays sit above it.
                 if end.is_none() && !menu_open && running {
                     telemetry::CableOverlay {}
+                }
+                // With no header bar, the paused state needs a floating
+                // reminder when the menu isn't showing it.
+                if paused && !menu_open && end.is_none() {
+                    span { class: "badge pause-badge", "Paused — esc for menu" }
                 }
             }
             if let Some(end) = end {
@@ -168,6 +137,9 @@ pub fn SessionView() -> Element {
                         div { class: "overlay-head",
                             h2 { "{title}" }
                             p { class: "sub", "{caption}" }
+                            if !status.is_empty() {
+                                p { class: "sub", "{status}" }
+                            }
                         }
                         div { class: "menu-volume",
                             label { "Volume · {volume_pct}%" }
@@ -188,6 +160,22 @@ pub fn SessionView() -> Element {
                                 class: "btn primary",
                                 onclick: move |_| *MENU_OPEN.write() = false,
                                 "Back to game"
+                            }
+                            if running {
+                                button {
+                                    class: "btn",
+                                    onclick: {
+                                        let runtime = runtime.clone();
+                                        move |_| runtime.borrow_mut().toggle_pause()
+                                    },
+                                    if paused {
+                                        icons::Play {}
+                                        "Resume"
+                                    } else {
+                                        icons::Pause {}
+                                        "Pause"
+                                    }
+                                }
                             }
                             button {
                                 class: "btn danger",

@@ -428,9 +428,10 @@ fn TelemetryCards(ctx_key: u64) -> Element {
     }
 }
 
-/// A deliberately button-shaped room code: click to copy.
+/// A deliberately button-shaped room code: click to copy. Shared with
+/// the lobby body, which shows the same code before the cable is in.
 #[component]
-fn RoomCode(code: String) -> Element {
+pub fn RoomCode(code: String) -> Element {
     let mut copied = use_signal(|| false);
     rsx! {
         button {

@@ -63,12 +63,20 @@ pub async fn import_files(storage: &Storage, files: Vec<dioxus::html::FileData>)
             }
         };
         if library::has_extension(&name, library::ROM_EXTENSIONS) {
-            if let Err(e) = library::rom_info(&name, &bytes) {
-                log::warn!("not importing {name}: {e}");
-                skipped += 1;
-                continue;
-            }
-            match storage::write(storage.roms(), &name, &bytes).await {
+            let info = match library::rom_info(&name, &bytes) {
+                Ok(info) => info,
+                Err(e) => {
+                    log::warn!("not importing {name}: {e}");
+                    skipped += 1;
+                    continue;
+                }
+            };
+            // The stored name is normalized to the cartridge, not the
+            // picked file: "CODE (crc32).gba". Re-importing the same
+            // ROM overwrites itself instead of piling up copies, and
+            // the UI never needs to show a filename.
+            let stored = library::normalized_file_name(&info);
+            match storage::write(storage.roms(), &stored, &bytes).await {
                 Ok(()) => roms += 1,
                 Err(e) => {
                     log::error!("couldn't import {name}: {e}");

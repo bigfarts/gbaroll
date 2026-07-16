@@ -114,9 +114,14 @@ pub fn App() -> Element {
 
 #[component]
 fn Shell() -> Element {
-    let mut notice = use_ctx().notice;
+    let Ctx {
+        mut notice,
+        mut config,
+        ..
+    } = use_ctx();
     let mut tab = use_signal(Tab::default);
     let current = tab();
+    let nick = config.read().nick.clone();
 
     rsx! {
         document::Title { "gbaroll" }
@@ -125,6 +130,18 @@ fn Shell() -> Element {
                 div { class: "brand",
                     h1 { "gbaroll" }
                     span { class: "tagline", "GBA link play, without the cable" }
+                }
+                // Identity lives on the main page: this is the name the
+                // roster shows to other players.
+                label { class: "identity",
+                    icons::User {}
+                    input {
+                        value: "{nick}",
+                        placeholder: "nickname",
+                        oninput: move |evt: FormEvent| {
+                            config.with_mut(|c| c.nick = evt.value())
+                        },
+                    }
                 }
                 nav { class: "tabs",
                     button {

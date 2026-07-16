@@ -8,6 +8,15 @@ use super::{icons, use_ctx, Ctx};
 use crate::library::{self, RomInfo};
 use crate::storage;
 
+/// Split a save's file name around its final dot.
+fn stem_of(name: &str) -> &str {
+    name.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(name)
+}
+
+fn ext_of(name: &str) -> &str {
+    name.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("sav")
+}
+
 #[component]
 pub fn PlayScreen() -> Element {
     let Ctx {
@@ -22,9 +31,13 @@ pub fn PlayScreen() -> Element {
     } = use_ctx();
 
     let mut search = use_signal(String::new);
-    // Deleting a ROM is irreversible, so it takes two clicks: arm on
-    // the row, then confirm in place.
+    // Deleting a ROM or save is irreversible, so it takes two clicks:
+    // arm on the row, then confirm in place.
     let mut pending_delete = use_signal(|| Option::<String>::None);
+    let mut pending_save_delete = use_signal(|| Option::<String>::None);
+    // The save being renamed, and the stem typed so far.
+    let mut rename_target = use_signal(|| Option::<String>::None);
+    let mut rename_value = use_signal(String::new);
 
     let (scanned, roms, saves) = match library.read().as_ref() {
         Some(Some((lib, saves))) => (true, lib.roms.clone(), saves.clone()),
@@ -41,7 +54,6 @@ pub fn PlayScreen() -> Element {
                 || r.display_name().to_ascii_lowercase().contains(&needle)
                 || r.title.to_ascii_lowercase().contains(&needle)
                 || r.code.to_ascii_lowercase().contains(&needle)
-                || r.file_name.to_ascii_lowercase().contains(&needle)
         })
         .cloned()
         .collect();
@@ -108,8 +120,7 @@ pub fn PlayScreen() -> Element {
                             div { class: "rom-name",
                                 span { class: "game", "{rom.display_name()}" }
                                 span { class: "rom-meta",
-                                    code { "{rom.file_name}" }
-                                    " · {rom.code} · "
+                                    "{rom.code} · "
                                     code { {format!("{:08x}", rom.crc32)} }
                                     " · {rom.size / 1024} KiB"
                                 }
@@ -188,7 +199,7 @@ pub fn PlayScreen() -> Element {
                                 } else {
                                     button {
                                         class: "btn ghost icon-btn",
-                                        title: "Delete {rom.file_name}",
+                                        title: "Delete {rom.display_name()}",
                                         onclick: {
                                             let file_name = rom.file_name.clone();
                                             move |_| pending_delete.set(Some(file_name.clone()))
@@ -230,25 +241,136 @@ pub fn PlayScreen() -> Element {
                 div { class: "save-list",
                     for save in saves.clone() {
                         div { class: "save-row",
-                            code { "{save}" }
-                            button {
-                                class: "btn ghost",
-                                onclick: {
-                                    let save = save.clone();
-                                    move |_| {
-                                        let storage = storage_res.read().clone().flatten();
+                            if rename_target.read().as_deref() == Some(save.as_str()) {
+                                // Renaming: edit the stem, keep the extension.
+                                input {
+                                    class: "rename",
+                                    value: "{rename_value}",
+                                    oninput: move |evt: FormEvent| rename_value.set(evt.value()),
+                                }
+                                code { {format!(".{}", ext_of(&save))} }
+                                button {
+                                    class: "btn primary",
+                                    disabled: rename_value.read().trim().is_empty(),
+                                    onclick: {
                                         let save = save.clone();
-                                        async move {
-                                            let Some(storage) = storage else { return };
-                                            match storage::read(storage.saves(), &save).await {
-                                                Ok(Some(bytes)) => crate::web::download_bytes(&save, &bytes),
-                                                _ => notice.set(Some(format!("couldn't read {save}"))),
+                                        move |_| {
+                                            let storage = storage_res.read().clone().flatten();
+                                            let save = save.clone();
+                                            let to = format!(
+                                                "{}.{}",
+                                                rename_value.read().trim(),
+                                                ext_of(&save)
+                                            );
+                                            async move {
+                                                let Some(storage) = storage else { return };
+                                                match storage::rename(storage.saves(), &save, &to).await {
+                                                    Ok(()) => {
+                                                        // The picker follows the rename.
+                                                        if selected_save.read().as_deref()
+                                                            == Some(save.as_str())
+                                                        {
+                                                            selected_save.set(Some(to));
+                                                        }
+                                                    }
+                                                    Err(e) => notice.set(Some(format!(
+                                                        "couldn't rename {save}: {e}"
+                                                    ))),
+                                                }
+                                                rename_target.set(None);
+                                                *library_rev.write() += 1;
                                             }
                                         }
-                                    }
-                                },
-                                icons::Download {}
-                                "Export"
+                                    },
+                                    "Rename"
+                                }
+                                button {
+                                    class: "btn",
+                                    onclick: move |_| rename_target.set(None),
+                                    "Cancel"
+                                }
+                            } else if pending_save_delete.read().as_deref() == Some(save.as_str()) {
+                                code { "{save}" }
+                                span { class: "spacer" }
+                                button {
+                                    class: "btn danger",
+                                    onclick: {
+                                        let save = save.clone();
+                                        move |_| {
+                                            let storage = storage_res.read().clone().flatten();
+                                            let save = save.clone();
+                                            async move {
+                                                let Some(storage) = storage else { return };
+                                                if let Err(e) =
+                                                    storage::delete(storage.saves(), &save).await
+                                                {
+                                                    notice.set(Some(format!(
+                                                        "couldn't delete {save}: {e}"
+                                                    )));
+                                                } else if selected_save.read().as_deref()
+                                                    == Some(save.as_str())
+                                                {
+                                                    selected_save.set(None);
+                                                }
+                                                pending_save_delete.set(None);
+                                                *library_rev.write() += 1;
+                                            }
+                                        }
+                                    },
+                                    "Confirm"
+                                }
+                                button {
+                                    class: "btn",
+                                    onclick: move |_| pending_save_delete.set(None),
+                                    "Cancel"
+                                }
+                            } else {
+                                code { "{save}" }
+                                span { class: "spacer" }
+                                button {
+                                    class: "btn ghost icon-btn",
+                                    title: "Rename",
+                                    onclick: {
+                                        let save = save.clone();
+                                        move |_| {
+                                            rename_value.set(stem_of(&save).to_string());
+                                            rename_target.set(Some(save.clone()));
+                                            pending_save_delete.set(None);
+                                        }
+                                    },
+                                    icons::Pencil {}
+                                }
+                                button {
+                                    class: "btn ghost",
+                                    onclick: {
+                                        let save = save.clone();
+                                        move |_| {
+                                            let storage = storage_res.read().clone().flatten();
+                                            let save = save.clone();
+                                            async move {
+                                                let Some(storage) = storage else { return };
+                                                match storage::read(storage.saves(), &save).await {
+                                                    Ok(Some(bytes)) => crate::web::download_bytes(&save, &bytes),
+                                                    _ => notice.set(Some(format!("couldn't read {save}"))),
+                                                }
+                                            }
+                                        }
+                                    },
+                                    icons::Download {}
+                                    "Export"
+                                }
+                                button {
+                                    class: "btn ghost icon-btn",
+                                    title: "Delete",
+                                    onclick: {
+                                        let save = save.clone();
+                                        move |_| {
+                                            pending_save_delete.set(Some(save.clone()));
+                                            rename_target.set(None);
+                                        }
+                                    },
+                                    icons::Trash2 {}
+                                }
                             }
                         }
                     }

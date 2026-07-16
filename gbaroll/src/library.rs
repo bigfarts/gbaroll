@@ -88,6 +88,19 @@ fn header_str(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// The OPFS name an imported ROM is stored under: `CODE (crc32).gba`,
+/// derived from the cartridge rather than whatever the picked file was
+/// called. Same cartridge → same name, so re-imports overwrite.
+pub fn normalized_file_name(info: &RomInfo) -> String {
+    let code: String = info
+        .code
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    let code = if code.is_empty() { "ROM".to_string() } else { code };
+    format!("{} ({:08x}).gba", code, info.crc32)
+}
+
 /// Parse the header of an imported ROM. Also the import-time validator.
 pub fn rom_info(file_name: &str, bytes: &[u8]) -> anyhow::Result<RomInfo> {
     if bytes.len() < 0xc0 {

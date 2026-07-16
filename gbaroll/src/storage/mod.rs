@@ -165,3 +165,24 @@ pub async fn delete(dir: &FileSystemDirectoryHandle, name: &str) -> Result<(), S
     JsFuture::from(dir.remove_entry(name)).await?;
     Ok(())
 }
+
+/// Rename within a directory as copy-then-delete (`FileSystemHandle.
+/// move()` isn't available everywhere yet). Refuses to clobber an
+/// existing file.
+pub async fn rename(
+    dir: &FileSystemDirectoryHandle,
+    from: &str,
+    to: &str,
+) -> Result<(), StorageError> {
+    if from == to {
+        return Ok(());
+    }
+    if read(dir, to).await?.is_some() {
+        return Err(err("a file with that name already exists"));
+    }
+    let bytes = read(dir, from)
+        .await?
+        .ok_or_else(|| err("the file disappeared"))?;
+    write(dir, to, &bytes).await?;
+    delete(dir, from).await
+}

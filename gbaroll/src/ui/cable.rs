@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use dioxus::prelude::*;
 use gbaroll_signaling::PlayerInfo;
 
-use super::{use_ctx, Ctx};
+use super::{icons, use_ctx, Ctx};
 use crate::net::lobby::{self, LobbyCommand, LobbyEvent, LobbyMode};
 use crate::runtime::{LINK_NOTICE, PANEL_OPEN, SESSION_EPOCH};
 
@@ -264,46 +264,42 @@ pub fn CableBody() -> Element {
                 p { class: "link-notice", "{notice}" }
             }
             if let Some(ui) = lobby_ui {
-                // Lobby: the roster, waiting for the start.
+                // Lobby: the room code, the roster, waiting for the start.
                 if let Some(code) = &ui.code {
-                    p { "Room code: " code { class: "room-code", "{code}" } }
+                    super::telemetry::RoomCode { code: code.clone() }
                 } else {
                     p { class: "sub", "Connecting to the server…" }
+                }
+                div { class: "roster",
+                    for (idx, player) in ui.players.iter().enumerate() {
+                        div { class: "roster-row",
+                            span {
+                                class: if player.ready { "roster-ready ready" } else { "roster-ready" },
+                                if player.ready {
+                                    icons::Check {}
+                                } else {
+                                    "·"
+                                }
+                            }
+                            div { class: "roster-name",
+                                span { "{player.nick}" }
+                                span { class: "game-title", "{player.rom_title}" }
+                            }
+                            if idx == ui.my_idx {
+                                span { class: "you-badge", "you" }
+                            } else if !have_crc.contains(&player.rom_crc32) {
+                                span { class: "link-notice", "missing this ROM" }
+                            }
+                        }
+                    }
                 }
                 if let Some(status) = &ui.status {
                     p { class: "sub", "{status}" }
                 }
-                for (idx, player) in ui.players.iter().enumerate() {
-                    p { class: "sub",
-                        if player.ready { "✓ " } else { "· " }
-                        "{player.nick}"
-                        span { class: "rtt", " · {player.rom_title}" }
-                        if idx == ui.my_idx {
-                            " (you)"
-                        } else if !have_crc.contains(&player.rom_crc32) {
-                            span { class: "link-notice", "  — you're missing this ROM" }
-                        }
-                    }
-                }
                 div { class: "menu-actions",
-                    button {
-                        class: if ui.my_ready { "btn" } else { "btn primary" },
-                        // The host's seat reads ready from the start.
-                        disabled: ui.starting
-                            || ui.players.iter().any(|p| !have_crc.contains(&p.rom_crc32)),
-                        onclick: {
-                            let ready = !ui.my_ready;
-                            move |_| {
-                                if let Some(ui) = LOBBY_UI.write().as_mut() {
-                                    ui.my_ready = ready;
-                                    ui.status = None;
-                                }
-                                send_cmd(LobbyCommand::SetReady { ready });
-                            }
-                        },
-                        if ui.my_ready { "Unready" } else { "Ready up" }
-                    }
                     if ui.my_idx == 0 {
+                        // The host's seat is always ready; they just start
+                        // the room once everyone else is.
                         button {
                             class: "btn primary",
                             disabled: ui.starting || !ui.players.iter().all(|p| p.ready),
@@ -315,6 +311,23 @@ pub fn CableBody() -> Element {
                                 send_cmd(LobbyCommand::Start);
                             },
                             "Start"
+                        }
+                    } else {
+                        button {
+                            class: if ui.my_ready { "btn" } else { "btn primary" },
+                            disabled: ui.starting
+                                || ui.players.iter().any(|p| !have_crc.contains(&p.rom_crc32)),
+                            onclick: {
+                                let ready = !ui.my_ready;
+                                move |_| {
+                                    if let Some(ui) = LOBBY_UI.write().as_mut() {
+                                        ui.my_ready = ready;
+                                        ui.status = None;
+                                    }
+                                    send_cmd(LobbyCommand::SetReady { ready });
+                                }
+                            },
+                            if ui.my_ready { "Unready" } else { "Ready up" }
                         }
                     }
                     button {
@@ -332,6 +345,9 @@ pub fn CableBody() -> Element {
                         },
                         "Leave"
                     }
+                }
+                if ui.my_idx == 0 && !ui.starting && !ui.players.iter().all(|p| p.ready) {
+                    p { class: "hint", "Waiting for everyone to ready up." }
                 }
             } else {
                 // Offline: host a new room or join a friend's.

@@ -29,11 +29,11 @@ tokio = "1"
 tokio-tungstenite = "0.23"
 env_logger = "0.11"
 
-# The engine crates live in the tango workspace next door; gbaroll is a
-# sibling checkout, not a member, so they come in by path.
-getgud = { path = "../tango/getgud" }
-mgba-siolink = { path = "../tango/mgba-siolink" }
-rennet = { path = "../tango/rennet" }
+# The engine crates live in their own repos (pulled out of the tango
+# workspace), so no tango checkout is needed to build gbaroll.
+getgud = { git = "https://github.com/tangobattle/getgud" }
+mgba-siolink = { git = "https://github.com/tangobattle/mgba-siolink" }
+rennet = { git = "https://github.com/tangobattle/rennet" }
 
 # The wasm32 port of the mgba build lives on the local fork's `wasm`
 # branch until it lands upstream; the patch redirects every mgba/

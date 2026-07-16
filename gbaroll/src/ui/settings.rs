@@ -1,6 +1,7 @@
-//! The Settings tab: identity, the netplay signaling server, the game
-//! database, video/audio, and the input binding editor with live
-//! capture (keyboard via the document listener, gamepad via the pump).
+//! The Settings tab: the netplay signaling server, the game database,
+//! video/audio, and the input binding editor with live capture
+//! (keyboard via the document listener, gamepad via the pump).
+//! Identity (the nickname) lives in the main page's top bar.
 
 use dioxus::prelude::*;
 
@@ -58,7 +59,7 @@ pub fn SettingsScreen() -> Element {
 
     let capture_target = *CAPTURE_TARGET.read();
 
-    let (nick, server, volume_pct, integer_scaling, rows) = {
+    let (server, volume_pct, integer_scaling, rows) = {
         let cfg = config.read();
         let rows: Vec<(MappedKey, &'static str, Vec<(DescribeKind, String)>)> = MAPPED_KEYS
             .iter()
@@ -71,7 +72,6 @@ pub fn SettingsScreen() -> Element {
             })
             .collect();
         (
-            cfg.nick.clone(),
             cfg.signaling_server.clone(),
             (cfg.volume * 100.0).round() as u32,
             cfg.integer_scaling,
@@ -91,17 +91,6 @@ pub fn SettingsScreen() -> Element {
     };
 
     rsx! {
-        section { class: "card",
-            h2 { "Identity" }
-            div { class: "field",
-                label { "Nickname" }
-                input {
-                    value: "{nick}",
-                    placeholder: "nickname",
-                    oninput: move |evt: FormEvent| config.with_mut(|c| c.nick = evt.value()),
-                }
-            }
-        }
         section { class: "card",
             h2 { "Netplay" }
             div { class: "field",

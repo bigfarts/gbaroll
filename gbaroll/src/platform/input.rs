@@ -375,6 +375,15 @@ pub struct HeldState {
 }
 
 impl HeldState {
+    /// Forget every held keyboard key. Called when the tab loses focus
+    /// or visibility: the matching keyup lands in another tab, so a
+    /// key held across the switch would otherwise stay "down" forever
+    /// (a held fast-forward would silently pin the tab at 3× CPU).
+    /// Gamepad state is exempt — it's re-polled whole every pump.
+    pub fn release_keys(&mut self) {
+        self.keys.clear();
+    }
+
     pub fn set_key(&mut self, code: &str, pressed: bool) {
         if pressed {
             self.keys.insert(code.into());
