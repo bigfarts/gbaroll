@@ -100,14 +100,62 @@ fn run(
     })
 }
 
+/// The solo session's per-tick body, extracted from the drive loop so a
+/// host without threads (the wasm main loop) can call it directly. The
+/// caller owns pacing and the pause gate; `tick` assumes it is only
+/// called when the session should actually advance one frame.
+pub struct LocalDriver {
+    shared: Arc<SharedSession>,
+    link: Arc<Mutex<Link>>,
+}
+
+impl LocalDriver {
+    pub fn new(shared: Arc<SharedSession>, link: Arc<Mutex<Link>>) -> LocalDriver {
+        LocalDriver { shared, link }
+    }
+
+    /// Advance one frame. Returns `false` once the session has ended
+    /// (the end is already recorded in `shared`).
+    pub fn tick(&mut self) -> bool {
+        if self.shared.quit.load(Ordering::Relaxed) {
+            self.shared.finish(SessionEnd::LocalQuit);
+            return false;
+        }
+
+        let joyflags = self.shared.joyflags.load(Ordering::Relaxed) & 0x3ff;
+
+        {
+            let mut link = self.link.lock().unwrap();
+            link.tick(&[joyflags]);
+            if let Some(buf) = link.video_buffer(0) {
+                self.shared.publish_video(buf);
+            }
+        }
+
+        // Hold-to-fast-forward comes in via the speed knob.
+        let speed = self.shared.speed.load(Ordering::Relaxed).max(25) as f32 / 100.0;
+        let fps_target = EXPECTED_FPS * speed;
+        self.shared.set_fps_target(fps_target);
+        {
+            let mut stats = self.shared.stats.lock().unwrap();
+            stats.fps_target = fps_target;
+            stats.frontier += 1;
+        }
+        true
+    }
+}
+
 fn drive(shared: Arc<SharedSession>, link: Arc<Mutex<Link>>) {
+    let mut driver = LocalDriver::new(shared.clone(), link);
     let mut pacer = Pacer::new();
 
     loop {
-        if shared.quit.load(Ordering::Relaxed) {
-            break;
-        }
         if shared.paused.load(Ordering::Acquire) {
+            // Quit must still be honored while paused.
+            if shared.quit.load(Ordering::Relaxed) {
+                shared.finish(SessionEnd::LocalQuit);
+                break;
+            }
             shared.set_fps_target(0.0);
             std::thread::sleep(PAUSED_TICK);
             pacer.reset();
@@ -116,28 +164,9 @@ fn drive(shared: Arc<SharedSession>, link: Arc<Mutex<Link>>) {
         if shared.take_pace_reset() {
             pacer.reset();
         }
-
-        let joyflags = shared.joyflags.load(Ordering::Relaxed) & 0x3ff;
-
-        {
-            let mut link = link.lock().unwrap();
-            link.tick(&[joyflags]);
-            if let Some(buf) = link.video_buffer(0) {
-                shared.publish_video(buf);
-            }
+        if !driver.tick() {
+            break;
         }
-
-        // Hold-to-fast-forward comes in via the speed knob.
-        let speed = shared.speed.load(Ordering::Relaxed).max(25) as f32 / 100.0;
-        let fps_target = EXPECTED_FPS * speed;
-        shared.set_fps_target(fps_target);
-        {
-            let mut stats = shared.stats.lock().unwrap();
-            stats.fps_target = fps_target;
-            stats.frontier += 1;
-        }
-        pacer.pace(fps_target);
+        pacer.pace(f32::from_bits(shared.fps_target.load(Ordering::Relaxed)));
     }
-
-    shared.finish(SessionEnd::LocalQuit);
 }
