@@ -1,21 +1,28 @@
-//! The ROM library: a scan of the roms directory, keyed by CRC32 —
-//! which is how sessions and replays name the ROM each side runs.
-//! No-Intro DATs (see [`crate::nointro`]) supply the display names,
-//! matched by CRC32; ROMs missing from every DAT fall back to their
-//! header title.
-
-use std::path::{Path, PathBuf};
+//! The ROM library: a scan of OPFS `roms/`, keyed by CRC32 — which is
+//! how sessions and replays name the ROM each side runs. No-Intro DATs
+//! (see [`crate::nointro`]) supply the display names, matched by CRC32;
+//! ROMs missing from every DAT fall back to their header title.
 
 use crate::nointro::DatIndex;
+use crate::storage::{self, Storage};
 
 pub const ROM_EXTENSIONS: &[&str] = &["gba", "srl", "agb"];
+pub const SAVE_EXTENSIONS: &[&str] = &["sav", "sa1", "srm"];
+
+pub fn has_extension(name: &str, extensions: &[&str]) -> bool {
+    name.rsplit_once('.')
+        .map(|(_, ext)| extensions.contains(&ext.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
 
 #[derive(Debug, Clone)]
 pub struct RomInfo {
-    pub path: PathBuf,
+    /// File name inside OPFS `roms/`.
+    pub file_name: String,
     /// The ROM header's internal title (0xA0..0xAC, ASCII, NUL-padded).
     pub title: String,
     /// The ROM header's game code (0xAC..0xB0).
+    #[allow(dead_code)] // netplay ROM identity (M5)
     pub code: String,
     pub crc32: u32,
     pub size: u64,
@@ -31,47 +38,45 @@ impl RomInfo {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Library {
     pub roms: Vec<RomInfo>,
 }
 
 impl Library {
-    pub fn scan(roms_dir: &Path, dat: &DatIndex) -> Library {
+    pub async fn scan(storage: &Storage, dat: &DatIndex) -> Library {
         let mut roms = Vec::new();
-        for entry in walkdir::WalkDir::new(roms_dir)
-            .follow_links(true)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            if !entry.file_type().is_file() {
+        let files = match storage::list_files(storage.roms()).await {
+            Ok(files) => files,
+            Err(e) => {
+                log::error!("couldn't list the ROM library: {e}");
+                return Library::default();
+            }
+        };
+        for (name, handle) in files {
+            if !has_extension(&name, ROM_EXTENSIONS) {
                 continue;
             }
-            let path = entry.path();
-            let ext_ok = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| ROM_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
-                .unwrap_or(false);
-            if !ext_ok {
-                continue;
-            }
-            match load_rom_info(path) {
-                Ok(mut info) => {
-                    info.dat_name = dat.lookup(info.crc32).map(|n| n.to_string());
-                    roms.push(info);
-                }
-                Err(e) => log::warn!("skipping {}: {e}", path.display()),
+            match storage::read_handle(&handle).await {
+                Ok(bytes) => match rom_info(&name, &bytes) {
+                    Ok(mut info) => {
+                        info.dat_name = dat.lookup(info.crc32).map(|n| n.to_string());
+                        roms.push(info);
+                    }
+                    Err(e) => log::warn!("skipping {name}: {e}"),
+                },
+                Err(e) => log::warn!("skipping {name}: {e}"),
             }
         }
         roms.sort_by(|a, b| {
             let an = a.display_name().to_ascii_lowercase();
             let bn = b.display_name().to_ascii_lowercase();
-            an.cmp(&bn).then_with(|| a.path.cmp(&b.path))
+            an.cmp(&bn).then_with(|| a.file_name.cmp(&b.file_name))
         });
         Library { roms }
     }
 
+    #[allow(dead_code)] // netplay roster checks (M5)
     pub fn by_crc32(&self, crc32: u32) -> Option<&RomInfo> {
         self.roms.iter().find(|r| r.crc32 == crc32)
     }
@@ -85,46 +90,44 @@ fn header_str(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn load_rom_info(path: &Path) -> anyhow::Result<RomInfo> {
-    let bytes = std::fs::read(path)?;
+/// Parse the header of an imported ROM. Also the import-time validator.
+pub fn rom_info(file_name: &str, bytes: &[u8]) -> anyhow::Result<RomInfo> {
     if bytes.len() < 0xc0 {
         anyhow::bail!("too small to be a GBA ROM");
     }
     Ok(RomInfo {
-        path: path.to_path_buf(),
+        file_name: file_name.to_owned(),
         title: header_str(&bytes[0xa0..0xac]),
         code: header_str(&bytes[0xac..0xb0]),
-        crc32: crc32fast::hash(&bytes),
+        crc32: crc32fast::hash(bytes),
         size: bytes.len() as u64,
         dat_name: None,
     })
 }
 
 /// Read a library ROM's bytes back for booting a link.
-pub fn read_rom(info: &RomInfo) -> anyhow::Result<Vec<u8>> {
-    let bytes = std::fs::read(&info.path)?;
+pub async fn read_rom(storage: &Storage, info: &RomInfo) -> anyhow::Result<Vec<u8>> {
+    let bytes = storage::read(storage.roms(), &info.file_name)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .ok_or_else(|| anyhow::anyhow!("{} disappeared from the library", info.file_name))?;
     if crc32fast::hash(&bytes) != info.crc32 {
-        anyhow::bail!("{} changed on disk since it was scanned", info.path.display());
+        anyhow::bail!("{} changed since it was scanned", info.file_name);
     }
     Ok(bytes)
 }
 
-/// Files offered by the save picker.
-pub fn list_saves(saves_dir: &Path) -> Vec<PathBuf> {
-    let mut saves: Vec<PathBuf> = walkdir::WalkDir::new(saves_dir)
-        .max_depth(2)
-        .follow_links(true)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.into_path())
-        .filter(|p| {
-            p.extension()
-                .and_then(|e| e.to_str())
-                .map(|e| matches!(e.to_ascii_lowercase().as_str(), "sav" | "sa1" | "srm"))
-                .unwrap_or(false)
-        })
-        .collect();
-    saves.sort();
-    saves
+/// File names offered by the save picker (OPFS `saves/`).
+pub async fn list_saves(storage: &Storage) -> Vec<String> {
+    match storage::list_files(storage.saves()).await {
+        Ok(files) => files
+            .into_iter()
+            .map(|(name, _)| name)
+            .filter(|n| has_extension(n, SAVE_EXTENSIONS))
+            .collect(),
+        Err(e) => {
+            log::error!("couldn't list saves: {e}");
+            Vec::new()
+        }
+    }
 }

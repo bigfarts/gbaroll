@@ -133,6 +133,11 @@ impl Runtime {
             ))))
             .ok();
         self.session = Some(session);
+        if let Some(audio) = &mut self.audio {
+            // A fixed silence cushion under the sink's sawtooth; see
+            // WebAudio::prime.
+            audio.prime(2048);
+        }
         self.clock.reset();
         *SESSION_EPOCH.write() += 1;
         Ok(())
@@ -242,6 +247,19 @@ impl Runtime {
         if let (Some(audio), true) = (&mut self.audio, self.session.is_some()) {
             audio.resume_if_suspended();
             audio.pump(&mut self.audio_binder);
+        }
+
+        // Debug probe: the simulated frontier, readable from devtools /
+        // automation even while the tab is hidden and the UI is frozen.
+        if changed {
+            if let Some(session) = &self.session {
+                let frontier = session.shared.stats.lock().unwrap().frontier;
+                let _ = js_sys::Reflect::set(
+                    &js_sys::global(),
+                    &"gbarollFrontier".into(),
+                    &(frontier as f64).into(),
+                );
+            }
         }
 
         // Present + UI signal: only on the visible-path source.

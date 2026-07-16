@@ -31,8 +31,10 @@ pub struct WebAudio {
     node: web_sys::AudioWorkletNode,
     /// Frames queued in the worklet as of its last report.
     reported_queued: Rc<Cell<u32>>,
-    /// Frames we've posted since that report (the estimate's other half).
-    sent_since_report: Cell<u32>,
+    /// Frames we've posted since that report (the estimate's other
+    /// half); the report handler zeroes it, since everything sent
+    /// before the report is already counted inside it.
+    sent_since_report: Rc<Cell<u32>>,
     scratch: Vec<[i16; super::NUM_CHANNELS]>,
     /// Keeps the report closure alive for the node's lifetime.
     _onmessage: Closure<dyn FnMut(web_sys::MessageEvent)>,
@@ -54,11 +56,20 @@ impl WebAudio {
         node.connect_with_audio_node(&ctx.destination())?;
 
         let reported_queued = Rc::new(Cell::new(0u32));
+        let sent_since_report = Rc::new(Cell::new(0u32));
         let onmessage = {
             let reported_queued = reported_queued.clone();
+            let sent_since_report = sent_since_report.clone();
             Closure::new(move |e: web_sys::MessageEvent| {
                 if let Some(n) = e.data().as_f64() {
                     reported_queued.set(n as u32);
+                    sent_since_report.set(0);
+                    // Debug probe: sink depth, readable from devtools.
+                    let _ = js_sys::Reflect::set(
+                        &js_sys::global(),
+                        &"gbarollAudioQueue".into(),
+                        &n.into(),
+                    );
                 }
                 on_report();
             })
@@ -70,7 +81,7 @@ impl WebAudio {
             ctx,
             node,
             reported_queued,
-            sent_since_report: Cell::new(0),
+            sent_since_report,
             scratch: Vec::new(),
             _onmessage: onmessage,
         })
@@ -104,6 +115,25 @@ impl WebAudio {
         }
         self.sent_since_report
             .set(self.sent_since_report.get() + n as u32);
+    }
+
+    /// Prime the sink with silence. The deficit pump alone can't build
+    /// a cushion — steady-state production exactly matches consumption
+    /// (the servo keeps the queue on the core side) — so without this
+    /// the ring's floor sits at zero and every pump-scheduling hiccup
+    /// is an audible gap. ~43ms of fixed latency buys dropout immunity;
+    /// the native SDL path carried a similar total.
+    pub fn prime(&mut self, frames: usize) {
+        self.scratch.clear();
+        self.scratch.resize(frames, [0, 0]);
+        let flat: &[i16] = bytemuck::cast_slice(&self.scratch);
+        let chunk = js_sys::Int16Array::from(flat);
+        if let Ok(port) = self.node.port() {
+            let transfer = js_sys::Array::of1(&chunk.buffer());
+            let _ = port.post_message_with_transferable(&chunk, &transfer);
+        }
+        self.sent_since_report
+            .set(self.sent_since_report.get() + frames as u32);
     }
 
     /// The context auto-suspends without a gesture and on some
