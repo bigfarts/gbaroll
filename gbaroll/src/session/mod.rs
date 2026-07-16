@@ -1,12 +1,14 @@
-//! Session runtimes: the emulator drive thread plus the state it shares
-//! with the UI and audio threads. Three kinds — netplay (rollback via
-//! `mgba_siolink::session::Session`), local (a plain link on one
-//! machine), and replay playback — all publish the same [`SharedSession`]
-//! so the session view renders them uniformly.
+//! Session state: what a running emulator shares with the UI and the
+//! audio pump, plus the per-kind drivers the runtime ticks. Two kinds —
+//! netplay (rollback via `mgba_siolink::session::Session`) and local (a
+//! plain link on one machine) — publish the same [`SharedSession`] so
+//! the session view renders them uniformly.
+//!
+//! `netplay.rs` (M5) and `playback/` (replay support, kept but not yet
+//! exposed on web) are present in-tree but not compiled until their
+//! ports land.
 
 pub mod local;
-pub mod netplay;
-pub mod playback;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -26,17 +28,15 @@ pub const EXPECTED_FPS: f32 = 16777216.0 / 280896.0;
 /// datagram carries the peer's whole redundancy window, so anything
 /// short of ~3s of total silence refills the queue instantly and never
 /// trips. 180 frames ≈ 3s of play.
+#[allow(dead_code)] // netplay (M5)
 pub const UNPLUG_QUEUE_LENGTH: usize = 180;
 
-/// Sleep quantum while stalled or paused.
-pub const PAUSED_TICK: std::time::Duration = std::time::Duration::from_millis(10);
-
-/// Uniform access to a live link for off-thread audio readout, for
-/// sessions driven through the rollback engine (which owns its link) and
-/// ones we drive directly. Replay audio is instead published by its
-/// drive thread into a dedicated PCM queue.
+/// Uniform access to a live link for audio readout, for sessions driven
+/// through the rollback engine (which owns its link) and ones we drive
+/// directly.
 #[derive(Clone)]
 pub enum LinkAccess {
+    #[allow(dead_code)] // netplay (M5)
     Handle(mgba_siolink::session::LinkHandle),
     Shared(Arc<Mutex<mgba_siolink::Link>>),
 }
@@ -51,6 +51,7 @@ impl LinkAccess {
     }
 }
 
+#[allow(dead_code)] // netplay ends (M5)
 #[derive(Debug, Clone)]
 pub enum SessionEnd {
     LocalQuit,
@@ -73,6 +74,7 @@ impl SessionEnd {
     /// Whether the local machine survives this end — netplay teardown is a
     /// cable unplug, not a power-off, so anything short of a local quit or
     /// a dead emulator leaves a machine to keep playing.
+    #[allow(dead_code)] // netplay (M5)
     pub fn unplugs(&self) -> bool {
         matches!(
             self,
@@ -98,6 +100,7 @@ pub struct Handoff {
     pub rtc_unix_micros: u64,
 }
 
+#[allow(dead_code)] // telemetry panel (M5)
 #[derive(Debug, Clone, Default)]
 pub struct PeerStat {
     #[allow(dead_code)]
@@ -106,6 +109,9 @@ pub struct PeerStat {
     pub rtt_ms: Option<f32>,
 }
 
+// Read by the session view / telemetry panel as their ports land
+// (M4/M5); written by the drivers from day one.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct Stats {
     pub queue_len: u32,
@@ -121,55 +127,52 @@ pub struct Stats {
     pub peers: Vec<PeerStat>,
 }
 
-/// State shared between the drive thread, the audio callback, and the
-/// UI. One instance per session, regardless of kind.
+/// State shared between the driver, the audio pump, and the UI. One
+/// instance per session, regardless of kind. On the web build all of it
+/// lives on one thread, but the atomics/mutexes are kept — they're free
+/// uncontended and the types stay `Send` for the engine's sake.
+#[allow(dead_code)] // present_delay/unplug/handoff are the netplay surface (M5)
 pub struct SharedSession {
-    /// Latest presented frame, converted to RGBA8 (240x160x4).
+    /// Latest presented frame: mGBA's raw little-endian BGR555,
+    /// 240x160x2 bytes.
     pub vbuf: Mutex<Vec<u8>>,
-    /// Bumped whenever `vbuf` changes, so the UI knows to re-upload.
+    /// Bumped whenever `vbuf` changes, so the presenter knows to
+    /// re-upload.
     pub vbuf_rev: AtomicU64,
     /// The pace the simulation is currently targeting, as f32 bits; the
     /// audio servo keys its faux clock off it. 0.0 = paused/silent.
     pub fps_target: AtomicU32,
-    /// The local joypad, written by the UI thread every frame.
+    /// The local joypad, written by the runtime pump every tick.
     pub joyflags: AtomicU32,
     /// Which player's screen (and audio) to present. For netplay this is
-    /// pinned to the local player; local/playback can switch.
+    /// pinned to the local player; local sessions can switch.
     pub view_player: AtomicUsize,
     /// Netplay: present delay, adjustable live.
     pub present_delay: AtomicU32,
-    /// Local/playback: pause flag.
+    /// Local: pause flag.
     pub paused: AtomicBool,
-    /// Local/playback: resume must also discard the old pacing deadline.
+    /// Local: resume must also discard the old pacing deadline.
     /// This is separate from `paused` because a short pause can begin and
-    /// end between two drive-loop iterations; in that case the loop never
-    /// observes `paused == true` and cannot reset its pacer on its own.
+    /// end between two pumps; in that case the pump never observes
+    /// `paused == true` and cannot reset its clock on its own.
     pace_reset_requested: AtomicBool,
-    /// Playback: speed percent (100 = 1x).
+    /// Local: speed percent (100 = 1x), for hold-to-fast-forward.
     pub speed: AtomicU32,
-    /// Playback: current tick / total ticks.
-    pub position: AtomicU32,
-    pub total_ticks: AtomicU32,
-    /// UI → drive: end the session.
+    /// UI → driver: end the session.
     pub quit: AtomicBool,
-    /// UI → netplay drive: pull the cable (end the session, but leave a
+    /// UI → netplay driver: pull the cable (end the session, but leave a
     /// handoff for the solo continuation).
     pub unplug: AtomicBool,
-    /// Drive → UI: why the session ended.
+    /// Driver → UI: why the session ended.
     pub end: Mutex<Option<SessionEnd>>,
-    /// Netplay drive → UI: the local machine's continuation, captured at
+    /// Netplay driver → UI: the local machine's continuation, captured at
     /// teardown whenever the end [`unplugs`](SessionEnd::unplugs).
     pub handoff: Mutex<Option<Handoff>>,
     pub stats: Mutex<Stats>,
-    /// Signaled once per presented frame; the UI subscription awaits it
-    /// to redraw in lockstep with the emulator instead of on a timer.
-    /// App-lifetime (shared across sessions) so the iced subscription's
-    /// identity stays stable.
-    pub frame_notify: Arc<tokio::sync::Notify>,
 }
 
 impl SharedSession {
-    pub fn new(present_delay: u32, frame_notify: Arc<tokio::sync::Notify>) -> Arc<SharedSession> {
+    pub fn new(present_delay: u32) -> Arc<SharedSession> {
         Arc::new(SharedSession {
             vbuf: Mutex::new(vec![0; crate::platform::video::SCREEN_BYTES]),
             vbuf_rev: AtomicU64::new(0),
@@ -180,14 +183,11 @@ impl SharedSession {
             paused: AtomicBool::new(false),
             pace_reset_requested: AtomicBool::new(false),
             speed: AtomicU32::new(100),
-            position: AtomicU32::new(0),
-            total_ticks: AtomicU32::new(0),
             quit: AtomicBool::new(false),
             unplug: AtomicBool::new(false),
             end: Mutex::new(None),
             handoff: Mutex::new(None),
             stats: Mutex::new(Stats::default()),
-            frame_notify,
         })
     }
 
@@ -197,18 +197,17 @@ impl SharedSession {
 
     /// Resume a locally paced session without trying to make up time spent
     /// paused. The reset request is published before the pause flag clears,
-    /// so a drive loop that observes the resume also observes the reset.
+    /// so a pump that observes the resume also observes the reset.
     pub fn resume(&self) {
         self.pace_reset_requested.store(true, Ordering::Relaxed);
         self.paused.store(false, Ordering::Release);
-        self.frame_notify.notify_one();
     }
 
     pub(crate) fn take_pace_reset(&self) -> bool {
         self.pace_reset_requested.swap(false, Ordering::Relaxed)
     }
 
-    /// Publish the presented core's raw BGR555 frame and wake the UI.
+    /// Publish the presented core's raw BGR555 frame.
     pub fn publish_video(&self, bgr555: &[u8]) {
         let mut vbuf = self.vbuf.lock().unwrap();
         if vbuf.len() != bgr555.len() {
@@ -217,7 +216,6 @@ impl SharedSession {
         vbuf.copy_from_slice(bgr555);
         drop(vbuf);
         self.vbuf_rev.fetch_add(1, Ordering::Release);
-        self.frame_notify.notify_one();
     }
 
     pub fn finish(&self, end: SessionEnd) {
@@ -227,98 +225,26 @@ impl SharedSession {
         }
         drop(slot);
         self.set_fps_target(0.0);
-        self.frame_notify.notify_one();
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionKind {
+    #[allow(dead_code)] // netplay (M5)
     Netplay,
     Local,
-    Playback,
 }
 
 /// What the session view needs to label things.
+#[allow(dead_code)] // read by the session view as its port lands (M4/M5)
 pub struct SessionDescriptor {
     pub kind: SessionKind,
-    pub num_players: usize,
-    #[allow(dead_code)]
     pub local_player: usize,
     pub nicks: Vec<String>,
     pub room_code: Option<String>,
     /// The local player's ROM identity, for opening a lobby from a
-    /// running session (`None` for playback).
+    /// running session.
     pub rom_crc32: Option<u32>,
-}
-
-pub struct SessionRuntime {
-    pub shared: Arc<SharedSession>,
-    pub descriptor: SessionDescriptor,
-    /// Local sessions only: the live link, for the plug-in path to
-    /// capture the machine (pause first; the capture must be the state
-    /// the session freezes on).
-    pub link: Option<LinkAccess>,
-    /// Playback-only: the seek controller + snapshot stores the scrub
-    /// UI drives.
-    pub playback: Option<playback::PlaybackHandles>,
-    /// Keeps the session's audio source bound into the host stream;
-    /// dropping it returns the output to silence.
-    _audio: Option<crate::platform::audio::Binding>,
-    /// Extra teardown to run before joining (e.g. waking the seek
-    /// worker so it can exit).
-    pre_join: Option<Box<dyn FnOnce() + Send>>,
-    threads: Vec<std::thread::JoinHandle<()>>,
-}
-
-impl SessionRuntime {
-    /// Unbind this session's audio ahead of a runtime swap: the audio slot
-    /// is app-global and `bind` refuses while it's held, so the incoming
-    /// runtime can only get sound if the outgoing one lets go first.
-    pub fn release_audio(&mut self) {
-        self._audio = None;
-    }
-}
-
-impl Drop for SessionRuntime {
-    fn drop(&mut self) {
-        self.shared.quit.store(true, Ordering::Relaxed);
-        if let Some(pre_join) = self.pre_join.take() {
-            pre_join();
-        }
-        for handle in self.threads.drain(..) {
-            let _ = handle.join();
-        }
-    }
-}
-
-/// Fixed-timestep pacer: accumulate the target period, sleep the
-/// remainder, and resync (rather than sprint) after a long stall.
-pub struct Pacer {
-    next_tick: std::time::Instant,
-}
-
-impl Pacer {
-    pub fn new() -> Self {
-        Pacer {
-            next_tick: std::time::Instant::now(),
-        }
-    }
-
-    /// The loop skipped this frame (paused/stalled): drop the cadence.
-    pub fn reset(&mut self) {
-        self.next_tick = std::time::Instant::now();
-    }
-
-    pub fn pace(&mut self, target_fps: f32) {
-        let target_fps = target_fps.max(1.0);
-        self.next_tick += std::time::Duration::from_secs_f64(1.0 / target_fps as f64);
-        let now = std::time::Instant::now();
-        if self.next_tick > now {
-            std::thread::sleep(self.next_tick - now);
-        } else if now - self.next_tick > std::time::Duration::from_millis(250) {
-            self.next_tick = now;
-        }
-    }
 }
 
 /// Deepen every core's audio buffer past mgba's 2048 default so servo
@@ -337,7 +263,7 @@ mod tests {
 
     #[test]
     fn resume_requests_one_pacer_reset() {
-        let shared = SharedSession::new(0, Arc::new(tokio::sync::Notify::new()));
+        let shared = SharedSession::new(0);
         shared.paused.store(true, Ordering::Relaxed);
 
         shared.resume();

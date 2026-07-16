@@ -16,21 +16,42 @@ mgba-siolink.workspace = true
 crc32fast.workspace = true
 log.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+bytemuck = "1"
 
 dioxus = { version = "0.7", features = ["web"] }
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "Window",
     "Document",
     "Element",
+    "EventTarget",
     "HtmlCanvasElement",
+    "HtmlElement",
+    "KeyboardEvent",
     "WebGl2RenderingContext",
     "WebGlProgram",
     "WebGlShader",
     "WebGlTexture",
     "WebGlUniformLocation",
     "Performance",
+    "Navigator",
+    "Gamepad",
+    "GamepadButton",
+    "GamepadMappingType",
+    "AudioContext",
+    "AudioContextOptions",
+    "AudioContextState",
+    "BaseAudioContext",
+    "AudioWorklet",
+    "AudioWorkletNode",
+    "AudioNode",
+    "AudioDestinationNode",
+    "MessagePort",
+    "MessageEvent",
 ] }
 console_error_panic_hook = "0.1"
 console_log = "1"

@@ -1,27 +1,14 @@
-//! The browser client. Currently the M1 spike: boot the built-in SIO
-//! test ROM through `mgba_siolink::Link`, drive it from a
-//! requestAnimationFrame accumulator, and present through the WebGL2
-//! framebuffer pipeline — proving the C core, the rAF loop shape, and
-//! the render path end to end.
-
-mod webgl;
-
-use std::cell::RefCell;
-use std::rc::Rc;
+//! The browser client's UI shell. M2 scope: a debug-grade screen that
+//! can boot a ROM (file picker or the built-in SIO test ROM), present
+//! it on the WebGL canvas, and exercise audio, keyboard, gamepad,
+//! pause, and volume. The real component tree lands with M4.
 
 use dioxus::prelude::*;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
-/// GBA cycles per second / cycles per frame — the exact tick rate.
-const EXPECTED_FPS: f64 = 16777216.0 / 280896.0;
+use crate::runtime::{Runtime, FRAME_REV, SESSION_EPOCH};
 
-/// Bounds worst-case callback time when catching up after a stall.
-const MAX_TICKS_PER_PUMP: u32 = 6;
-
-/// The determinism gate: log a digest of the frame at this tick for
-/// comparison against the native build.
-const DIGEST_TICK: u64 = 600;
+const WORKLET_JS: Asset = asset!("/assets/audio-worklet.js");
 
 /// The C shim's clock (mgba's `gettimeofday` for savestate stamps).
 #[no_mangle]
@@ -36,154 +23,144 @@ pub fn main() {
     dioxus::launch(app);
 }
 
-fn app() -> Element {
-    use_effect(|| {
-        if let Err(e) = start_spike() {
-            log::error!("spike failed to start: {e}");
+/// Ensure the audio sink exists (must run within a user gesture), then
+/// boot the ROM.
+async fn boot(runtime: std::rc::Rc<std::cell::RefCell<Runtime>>, rom: Vec<u8>) {
+    if !runtime.borrow().has_audio() {
+        match crate::platform::audio::web::WebAudio::create(&WORKLET_JS.to_string(), || {
+            crate::runtime::pump_from_audio_report();
+        })
+        .await
+        {
+            Ok(audio) => runtime.borrow_mut().set_audio(audio),
+            Err(e) => log::error!("audio unavailable: {e:?}"),
         }
-    });
+    }
+    if let Err(e) = runtime.borrow_mut().start_local(rom, None) {
+        log::error!("couldn't start session: {e:#}");
+    }
+}
+
+fn app() -> Element {
+    let runtime = use_hook(Runtime::install);
+    let mut rom_bytes = use_signal(|| Option::<Vec<u8>>::None);
+    let mut rom_name = use_signal(String::new);
+
+    // Attach the presenter once the canvas exists.
+    {
+        let runtime = runtime.clone();
+        use_effect(move || {
+            let canvas = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.get_element_by_id("framebuffer"))
+                .and_then(|el| el.dyn_into::<web_sys::HtmlCanvasElement>().ok());
+            match canvas {
+                Some(canvas) => runtime.borrow_mut().attach_canvas(&canvas),
+                None => log::error!("canvas missing"),
+            }
+        });
+    }
+
+    // Status line, re-rendered per presented frame.
+    let status = {
+        let runtime = runtime.clone();
+        move || {
+            let _ = FRAME_REV.read();
+            let _ = SESSION_EPOCH.read();
+            let rt = runtime.borrow();
+            match rt.shared() {
+                Some(shared) => {
+                    let stats = shared.stats.lock().unwrap();
+                    let paused = shared.paused.load(std::sync::atomic::Ordering::Relaxed);
+                    if paused {
+                        "paused".to_string()
+                    } else {
+                        format!(
+                            "running · frame {} · target {:.1} fps",
+                            stats.frontier, stats.fps_target
+                        )
+                    }
+                }
+                None => "no session".to_string(),
+            }
+        }
+    };
+
     rsx! {
-        h1 { "gbaroll — wasm spike" }
-        p { "SIO test ROM on the mgba core, rAF-driven, WebGL2-presented." }
+        h1 { "gbaroll" }
+        p {
+            "Pick a .gba ROM (stays in this tab — nothing uploads), or boot the built-in test ROM. "
+            "Arrows move · Z/X = A/B · A/S = L/R · Enter/Space = Start/Select · hold LShift = fast-forward."
+        }
+        div {
+            input {
+                r#type: "file",
+                accept: ".gba,.agb,.srl",
+                onchange: move |evt| {
+                    async move {
+                        if let Some(file) = evt.files().into_iter().next() {
+                            match file.read_bytes().await {
+                                Ok(bytes) => {
+                                    let bytes = bytes.to_vec();
+                                    log::info!("loaded {} ({} bytes)", file.name(), bytes.len());
+                                    rom_name.set(file.name());
+                                    rom_bytes.set(Some(bytes));
+                                }
+                                Err(e) => log::error!("couldn't read {}: {e:?}", file.name()),
+                            }
+                        }
+                    }
+                },
+            }
+            button {
+                disabled: rom_bytes.read().is_none(),
+                onclick: {
+                    let runtime = runtime.clone();
+                    move |_| {
+                        if let Some(rom) = rom_bytes.read().clone() {
+                            let runtime = runtime.clone();
+                            spawn(async move { boot(runtime, rom).await; });
+                        }
+                    }
+                },
+                "Play {rom_name}"
+            }
+            button {
+                onclick: {
+                    let runtime = runtime.clone();
+                    move |_| {
+                        let runtime = runtime.clone();
+                        spawn(async move { boot(runtime, mgba_siolink::testrom::build()).await; });
+                    }
+                },
+                "Boot test ROM"
+            }
+            button {
+                onclick: {
+                    let runtime = runtime.clone();
+                    move |_| runtime.borrow_mut().toggle_pause()
+                },
+                "Pause/Resume"
+            }
+            label {
+                "Volume "
+                input {
+                    r#type: "range",
+                    min: "0",
+                    max: "100",
+                    value: "100",
+                    oninput: {
+                        let runtime = runtime.clone();
+                        move |evt: FormEvent| {
+                            if let Ok(v) = evt.value().parse::<f32>() {
+                                runtime.borrow().set_volume(v / 100.0);
+                            }
+                        }
+                    },
+                }
+            }
+        }
+        p { {status()} }
         canvas { id: "framebuffer", width: "720", height: "480" }
     }
-}
-
-struct Spike {
-    link: mgba_siolink::Link,
-    presenter: webgl::WebGlPresenter,
-    /// rAF accumulator: fractional ticks owed.
-    last_ms: Option<f64>,
-    owed: f64,
-    ticks: u64,
-    digest_logged: bool,
-    /// Worst tick-batch duration in the current one-second window.
-    batch_max_ms: f64,
-    window_start_ms: f64,
-}
-
-impl Spike {
-    fn pump(&mut self, now_ms: f64) {
-        let Some(last) = self.last_ms.replace(now_ms) else {
-            return;
-        };
-        let mut dt = (now_ms - last) / 1000.0;
-        if dt > 0.25 {
-            // Stall (hidden tab, long GC): resync, don't sprint.
-            self.owed = 0.0;
-            dt = 1.0 / 60.0;
-        }
-        self.owed += dt * EXPECTED_FPS;
-        let due = (self.owed.floor() as u32).min(MAX_TICKS_PER_PUMP);
-        self.owed = (self.owed - due as f64).min(1.0);
-
-        let batch_start = performance_now();
-        for _ in 0..due {
-            self.link.tick(&[0]);
-            self.ticks += 1;
-            if self.ticks == DIGEST_TICK && !self.digest_logged {
-                self.digest_logged = true;
-                // The engine's own cross-peer state digest (registers +
-                // RAMs + lockstep state) — the desync canary, exactly
-                // what must match the native build.
-                match self.link.save() {
-                    Ok(snapshot) => log::info!(
-                        "determinism gate: state digest {:08x} at tick {}",
-                        snapshot.digest(),
-                        self.ticks
-                    ),
-                    Err(e) => log::error!("determinism gate: snapshot failed: {e}"),
-                }
-            }
-        }
-        let batch_ms = performance_now() - batch_start;
-
-        // The first seconds show a synthetic BGR555 gradient through the
-        // real present path (the testrom's own screen is blank white) —
-        // a visible check that upload + decode + draw work.
-        if self.ticks < 60 {
-            let mut pattern = vec![0u8; 240 * 160 * 2];
-            for y in 0..160u16 {
-                for x in 0..240u16 {
-                    let texel = ((x * 31 / 239) & 0x1f)          // red left→right
-                        | ((((y * 31) / 159) & 0x1f) << 5)       // green top→bottom
-                        | ((((x + y) / 13) & 0x1f) << 10);       // blue diagonal bands
-                    let i = (y as usize * 240 + x as usize) * 2;
-                    pattern[i..i + 2].copy_from_slice(&texel.to_le_bytes());
-                }
-            }
-            self.presenter.present(&pattern);
-        } else if let Some(buf) = self.link.video_buffer(0) {
-            self.presenter.present(buf);
-        }
-
-        // Once a second, report the worst tick-batch time — the frame
-        // budget headroom measurement.
-        self.batch_max_ms = self.batch_max_ms.max(batch_ms);
-        if now_ms - self.window_start_ms >= 1000.0 {
-            log::info!(
-                "tick {}: worst batch {:.2}ms (of 16.7ms budget)",
-                self.ticks,
-                self.batch_max_ms
-            );
-            self.batch_max_ms = 0.0;
-            self.window_start_ms = now_ms;
-        }
-    }
-}
-
-fn performance_now() -> f64 {
-    web_sys::window().unwrap().performance().unwrap().now()
-}
-
-fn start_spike() -> Result<(), String> {
-    let document = web_sys::window()
-        .ok_or("no window")?
-        .document()
-        .ok_or("no document")?;
-    let canvas: web_sys::HtmlCanvasElement = document
-        .get_element_by_id("framebuffer")
-        .ok_or("canvas missing")?
-        .dyn_into()
-        .map_err(|_| "not a canvas")?;
-    let presenter = webgl::WebGlPresenter::new(&canvas)?;
-
-    let rom = mgba_siolink::testrom::build();
-    // Fixed RTC (not wall clock) so the determinism-gate digest is
-    // directly comparable against a native run of the same boot.
-    let rtc = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
-    let link = mgba_siolink::Link::with_options(mgba_siolink::LinkOptions {
-        sides: vec![mgba_siolink::SideOptions { rom, save: None }],
-        rtc: Some(rtc),
-    })
-    .map_err(|e| format!("link boot: {e}"))?;
-    log::info!("link booted");
-
-    let spike = Rc::new(RefCell::new(Spike {
-        link,
-        presenter,
-        last_ms: None,
-        owed: 0.0,
-        ticks: 0,
-        digest_logged: false,
-        batch_max_ms: 0.0,
-        window_start_ms: performance_now(),
-    }));
-
-    // The self-rescheduling rAF closure.
-    let handle: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>> = Rc::new(RefCell::new(None));
-    let handle2 = handle.clone();
-    *handle.borrow_mut() = Some(Closure::new(move |now_ms: f64| {
-        spike.borrow_mut().pump(now_ms);
-        request_animation_frame(handle2.borrow().as_ref().unwrap());
-    }));
-    request_animation_frame(handle.borrow().as_ref().unwrap());
-    Ok(())
-}
-
-fn request_animation_frame(closure: &Closure<dyn FnMut(f64)>) {
-    web_sys::window()
-        .unwrap()
-        .request_animation_frame(closure.as_ref().unchecked_ref())
-        .expect("requestAnimationFrame");
 }

@@ -16,6 +16,9 @@
 #[cfg(not(target_arch = "wasm32"))]
 compile_error!("gbaroll is browser-only: build with `dx serve` (wasm32-unknown-unknown)");
 
+mod platform;
+mod runtime;
+mod session;
 mod web;
 
 fn main() {

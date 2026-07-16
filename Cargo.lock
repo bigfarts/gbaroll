@@ -239,6 +239,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "bytemuck"
+version = "1.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6aedf8ae72766347502cf3cb4f41cf5e9cc37d28bee90f1fdaaae15f9cf9424"
+
+[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1384,6 +1390,7 @@ name = "gbaroll"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "console_error_panic_hook",
  "console_log",
  "crc32fast",
@@ -1392,7 +1399,10 @@ dependencies = [
  "log",
  "mgba",
  "mgba-siolink",
+ "serde",
+ "thiserror 1.0.69",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
