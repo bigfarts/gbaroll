@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [web, main]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -44,11 +44,32 @@ jobs:
       - name: Build the web bundle
         run: dx build --package gbaroll --release
 
-      - name: Upload the bundle
-        uses: actions/upload-artifact@v4
+      # The bundle IS the site: stamp the custom domain and hand it to
+      # Pages.
+      - name: Stamp the Pages domain
+        run: echo "gbaroll.farts.fyi" > target/dx/gbaroll/release/web/public/CNAME
+
+      - name: Upload the Pages bundle
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: gbaroll-web
           path: target/dx/gbaroll/release/web/public
+
+  # Publish the bundle to GitHub Pages (pushes to main only; PRs stop
+  # at the build).
+  pages:
+    needs: web
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
 
   # The native pieces (workspace default members).
   native:
