@@ -1,0 +1,8 @@
+# Toolchain wiring for the wasm32 build of the mgba C core (mgba-sys's
+# build.rs and the cc crate read these). Native builds ignore them.
+[env]
+WASI_SDK_PATH = "/opt/wasi-sdk"
+# bindgen needs a wasm-aware libclang (Apple's has no wasm32 backend).
+LIBCLANG_PATH = "/opt/homebrew/opt/llvm/lib"
+CC_wasm32_unknown_unknown = "/opt/wasi-sdk/bin/clang"
+AR_wasm32_unknown_unknown = "/opt/wasi-sdk/bin/llvm-ar"

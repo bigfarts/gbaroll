@@ -5,55 +5,32 @@ edition = "2021"
 license = "MPL-2.0"
 publish = false
 
+# wasm32-only (see src/main.rs); build with `dx serve` / `dx build`.
+# Deps grow back milestone by milestone as the undeclared portable
+# modules (session/, platform/, net/) come back into the tree.
 [dependencies]
 # Engine (lives in the tango workspace next door).
 mgba.workspace = true
 mgba-siolink.workspace = true
-rennet.workspace = true
 
-gbaroll-replay = { path = "../gbaroll-replay" }
-gbaroll-signaling = { path = "../gbaroll-signaling" }
-
-# UI. wgpu is pinned to iced_wgpu 0.14's transitive version so cargo
-# unifies the crate (the framebuffer widget talks to wgpu directly).
-iced = { version = "0.14", features = ["tokio", "advanced", "canvas"] }
-wgpu = { version = "27", default-features = false }
-rfd = "0.14"
-# Lucide icon font (bundled .ttf + Icon enum → codepoints). No `iced`
-# feature: it pins an older iced; we register the font bytes and render
-# the glyphs with our own iced.
-lucide-icons = "0.501"
-
-# Audio + gamepad. SDL3's handles are !Send and main-thread-only;
-# send_wrapper lets them live in globals with a runtime thread check.
-sdl3 = { version = "0.18", default-features = false, features = ["build-from-source-static"] }
-send_wrapper = "0.6"
-bytemuck = "1"
-
-# Netplay transport.
-datachannel-wrapper = { git = "https://github.com/tangobattle/datachannel-wrapper" }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
-tokio-tungstenite.workspace = true
-futures.workspace = true
-
-serde.workspace = true
-# No-Intro DAT files (Logiqx XML flavor).
-quick-xml = "0.36"
-# Fetching the GBA No-Intro DAT from the libretro-database mirror.
-reqwest = { version = "0.11", default-features = false, features = ["native-tls"] }
-serde_json.workspace = true
-bincode.workspace = true
-# Boot-payload compression for the plug-in exchange (and replays).
-zstd = "0.13"
 crc32fast.workspace = true
-chrono = "0.4"
-directories-next = "2"
-walkdir = "2"
 log.workspace = true
-env_logger.workspace = true
 anyhow.workspace = true
-thiserror.workspace = true
 
-[dev-dependencies]
-gbaroll-signaling-server = { path = "../gbaroll-signaling-server" }
-tempfile = "3"
+dioxus = { version = "0.7", features = ["web"] }
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "WebGl2RenderingContext",
+    "WebGlProgram",
+    "WebGlShader",
+    "WebGlTexture",
+    "WebGlUniformLocation",
+    "Performance",
+] }
+console_error_panic_hook = "0.1"
+console_log = "1"

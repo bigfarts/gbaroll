@@ -1,0 +1,9 @@
+[application]
+name = "gbaroll"
+asset_dir = "assets"
+
+[web.app]
+title = "gbaroll"
+
+[web.watcher]
+watch_path = ["src", "assets"]

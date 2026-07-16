@@ -6,6 +6,13 @@ members = [
     "gbaroll-signaling",
     "gbaroll-signaling-server",
 ]
+# gbaroll is wasm32-only (built via `dx`); plain `cargo build`/`test` at
+# the root covers the native pieces.
+default-members = [
+    "gbaroll-replay",
+    "gbaroll-signaling",
+    "gbaroll-signaling-server",
+]
 
 # Shared versions for deps used by 2+ member crates.
 [workspace.dependencies]
@@ -27,6 +34,13 @@ env_logger = "0.11"
 getgud = { path = "../tango/getgud" }
 mgba-siolink = { path = "../tango/mgba-siolink" }
 rennet = { path = "../tango/rennet" }
+
+# The wasm32 port of the mgba build lives on the local fork's `wasm`
+# branch until it lands upstream; the patch redirects every mgba/
+# mgba-sys reference in the graph (including mgba-siolink's).
+[patch."https://github.com/tangobattle/mgba-rs"]
+mgba = { path = "../mgba-rs" }
+mgba-sys = { path = "../mgba-rs/mgba-sys" }
 
 [profile.release]
 # The emulator is CPU-bound; keep iterative release builds cheap (Cargo
