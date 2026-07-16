@@ -1,8 +1,17 @@
-# Toolchain wiring for the wasm32 build of the mgba C core (mgba-sys's
-# build.rs and the cc crate read these). Native builds ignore them.
-[env]
-WASI_SDK_PATH = "/opt/wasi-sdk"
-# bindgen needs a wasm-aware libclang (Apple's has no wasm32 backend).
-LIBCLANG_PATH = "/opt/homebrew/opt/llvm/lib"
-CC_wasm32_unknown_unknown = "/opt/wasi-sdk/bin/clang"
-AR_wasm32_unknown_unknown = "/opt/wasi-sdk/bin/llvm-ar"
+# Building the wasm32 bundle cross-compiles the mgba C core, which
+# needs a wasm-aware clang. The mgba-sys build script, bindgen, and the
+# cc crate (zstd's wasm shim) read these environment variables; native
+# builds ignore them. They're machine-specific, so they don't live in
+# the repo — provide them from the environment (CI does; see
+# .github/workflows/build.yml) or from a cargo config outside the
+# checkout (~/.cargo/config.toml, or a parent directory's):
+#
+#     [env]
+#     # A wasi-sdk >= 25 install (clang with the wasm32 backend plus
+#     # the wasi sysroot): github.com/WebAssembly/wasi-sdk/releases
+#     WASI_SDK_PATH = "/opt/wasi-sdk"
+#     CC_wasm32_unknown_unknown = "/opt/wasi-sdk/bin/clang"
+#     AR_wasm32_unknown_unknown = "/opt/wasi-sdk/bin/llvm-ar"
+#     # Only where the system libclang lacks the wasm32 backend
+#     # (macOS: `brew install llvm`); Linux distros' libclang is fine.
+#     LIBCLANG_PATH = "/opt/homebrew/opt/llvm/lib"

@@ -1,0 +1,67 @@
+name: build
+
+on:
+  push:
+    branches: [web, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # The wasm bundle: the mgba C core cross-compiles via wasi-sdk's
+  # clang into the wasm32-unknown-unknown Rust binary, then dx wraps
+  # it into the static site.
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # mgba-sys's build script, bindgen, and the cc crate (zstd's
+      # wasm shim) read these; see .cargo/config.toml for the local
+      # equivalent.
+      - name: Install wasi-sdk
+        run: |
+          curl -fsSL -o /tmp/wasi-sdk.tar.gz \
+            "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-25/wasi-sdk-25.0-x86_64-linux.tar.gz"
+          sudo tar -C /opt -xzf /tmp/wasi-sdk.tar.gz
+          sudo mv /opt/wasi-sdk-25.0-x86_64-linux /opt/wasi-sdk
+          {
+            echo "WASI_SDK_PATH=/opt/wasi-sdk"
+            echo "CC_wasm32_unknown_unknown=/opt/wasi-sdk/bin/clang"
+            echo "AR_wasm32_unknown_unknown=/opt/wasi-sdk/bin/llvm-ar"
+          } >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: cargo-bins/cargo-binstall@main
+
+      - name: Install dioxus-cli
+        run: cargo binstall --no-confirm dioxus-cli@0.7.9
+
+      - name: Build the web bundle
+        run: dx build --package gbaroll --release
+
+      - name: Upload the bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: gbaroll-web
+          path: target/dx/gbaroll/release/web/public
+
+  # The native pieces (workspace default members).
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test
