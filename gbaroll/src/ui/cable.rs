@@ -247,15 +247,29 @@ pub fn CableBody() -> Element {
     let notice = LINK_NOTICE.read().clone();
     let lobby_ui = LOBBY_UI.read().clone();
 
-    // My library, for the "you need a copy of every ROM" roster check.
-    let have_crc = {
+    // My library, for the "you need a copy of every ROM" roster check —
+    // and for each seat's friendly name: the wire only carries the
+    // header title, but the No-Intro name resolves locally by CRC32.
+    let (have_crc, roster_names) = {
         let lib = ctx.library.read();
+        let lib = lib.as_ref().and_then(|v| v.as_ref()).map(|(lib, _)| lib);
         let crcs: std::collections::HashSet<u32> = lib
-            .as_ref()
-            .and_then(|v| v.as_ref())
-            .map(|(lib, _)| lib.roms.iter().map(|r| r.crc32).collect())
+            .map(|lib| lib.roms.iter().map(|r| r.crc32).collect())
             .unwrap_or_default();
-        crcs
+        let names: Vec<String> = lobby_ui
+            .as_ref()
+            .map(|ui| {
+                ui.players
+                    .iter()
+                    .map(|p| {
+                        lib.and_then(|l| l.by_crc32(p.rom_crc32))
+                            .map(|r| r.display_name().to_string())
+                            .unwrap_or_else(|| p.rom_title.clone())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        (crcs, names)
     };
 
     rsx! {
@@ -281,9 +295,15 @@ pub fn CableBody() -> Element {
                                     "·"
                                 }
                             }
+                            // The seat's identity colour — the same one
+                            // its ping trace uses once the cable is in.
+                            span {
+                                class: "dot",
+                                style: "background: {super::telemetry::PEER_COLORS[idx % super::telemetry::PEER_COLORS.len()]}",
+                            }
                             div { class: "roster-name",
                                 span { "{player.nick}" }
-                                span { class: "game-title", "{player.rom_title}" }
+                                span { class: "game-title", "{roster_names[idx]}" }
                             }
                             if idx == ui.my_idx {
                                 span { class: "you-badge", "you" }
@@ -351,24 +371,36 @@ pub fn CableBody() -> Element {
                 }
             } else {
                 // Offline: host a new room or join a friend's.
-                div { class: "menu-actions",
-                    button {
-                        class: "btn primary",
-                        onclick: {
-                            let ctx = ctx.clone();
-                            move |_| start_lobby(&ctx, LobbyMode::Create)
-                        },
-                        "Create a room"
-                    }
+                button {
+                    class: "btn primary wide",
+                    onclick: {
+                        let ctx = ctx.clone();
+                        move |_| start_lobby(&ctx, LobbyMode::Create)
+                    },
+                    icons::Cable {}
+                    "Create a room"
                 }
                 p { class: "sub", "You'll get a code to share with the other players." }
-                div { class: "menu-actions",
+                div { class: "or-divider", "or" }
+                div { class: "join-row",
                     input {
                         r#type: "text",
                         placeholder: "6-character code",
                         value: "{code_entry}",
                         oninput: move |evt: FormEvent| {
                             code_entry.set(sanitize_room_code(&evt.value()));
+                        },
+                        // Enter submits once the code is complete.
+                        onkeydown: {
+                            let ctx = ctx.clone();
+                            move |evt: KeyboardEvent| {
+                                let code = code_entry.read().clone();
+                                if evt.key().to_string() == "Enter"
+                                    && code.len() == gbaroll_signaling::ROOM_CODE_LEN
+                                {
+                                    start_lobby(&ctx, LobbyMode::Join { code });
+                                }
+                            }
                         },
                     }
                     button {

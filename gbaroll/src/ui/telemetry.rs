@@ -94,9 +94,103 @@ struct Metric {
     value_tone: Tone,
 }
 
-fn metrics_from(history: &std::collections::VecDeque<MetricSample>, peer_nicks: &[String]) -> Vec<Metric> {
+/// Per-seat identity colours (TokyoNight set): the lobby roster's dots
+/// and the shared ping graph's traces, both indexed by player seat so
+/// they agree. Deliberately disjoint from the health-tone palette
+/// (green/amber/red) so identity never reads as a judgement.
+pub(super) const PEER_COLORS: [&str; 4] = ["#7dcfff", "#bb9af7", "#73daca", "#ff9e64"];
+
+fn seat_color(player: usize) -> &'static str {
+    PEER_COLORS[player % PEER_COLORS.len()]
+}
+
+/// One peer's trace on the shared ping graph: normalized heights
+/// (`None` breaks the line) plus the legend's reading.
+#[derive(Clone, PartialEq)]
+struct PingSeries {
+    nick: String,
+    color: &'static str,
+    points: Vec<Option<f32>>,
+    latest: Option<f32>,
+}
+
+fn ping_series(
+    history: &std::collections::VecDeque<MetricSample>,
+    peers: &[(usize, String)],
+) -> Vec<PingSeries> {
     let latest = history.back();
-    let mut metrics = vec![
+    peers
+        .iter()
+        .enumerate()
+        .map(|(i, (player, nick))| PingSeries {
+            nick: nick.clone(),
+            color: seat_color(*player),
+            points: history
+                .iter()
+                .map(|s| {
+                    s.pings
+                        .get(i)
+                        .copied()
+                        .flatten()
+                        .map(|ms| (ms / PING_SPAN).clamp(0.0, 1.0))
+                })
+                .collect(),
+            latest: latest.and_then(|s| s.pings.get(i).copied().flatten()),
+        })
+        .collect()
+}
+
+/// Redraw the shared ping graph: every peer's trace on one canvas,
+/// coloured by seat rather than by health.
+fn draw_ping_graph(canvas_id: &str, series: &[PingSeries]) {
+    let Some(ctx) = canvas_2d(canvas_id) else {
+        return;
+    };
+    let (canvas, ctx) = ctx;
+    let (w, h) = (canvas.width() as f64, canvas.height() as f64);
+    let margin = 2.0;
+
+    ctx.set_fill_style_str("#1f2335");
+    ctx.fill_rect(0.0, 0.0, w, h);
+
+    let y_of = |n: f32| margin + (1.0 - n.clamp(0.0, 1.0)) as f64 * (h - 2.0 * margin);
+    let step = w / (HISTORY_LEN - 1) as f64;
+    ctx.set_line_width(1.5);
+    for s in series {
+        let n = s.points.len();
+        let x_of = |i: usize| w - (n - 1 - i) as f64 * step;
+        ctx.set_stroke_style_str(s.color);
+        for i in 1..n {
+            let (Some(a), Some(b)) = (s.points[i - 1], s.points[i]) else {
+                continue;
+            };
+            ctx.begin_path();
+            ctx.move_to(x_of(i - 1), y_of(a));
+            ctx.line_to(x_of(i), y_of(b));
+            ctx.stroke();
+        }
+    }
+}
+
+/// Look a sparkline canvas up and hand back its 2D context.
+fn canvas_2d(
+    canvas_id: &str,
+) -> Option<(web_sys::HtmlCanvasElement, web_sys::CanvasRenderingContext2d)> {
+    let canvas = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id(canvas_id))
+        .and_then(|el| el.dyn_into::<web_sys::HtmlCanvasElement>().ok())?;
+    let ctx = canvas
+        .get_context("2d")
+        .ok()
+        .flatten()
+        .and_then(|c| c.dyn_into::<web_sys::CanvasRenderingContext2d>().ok())?;
+    Some((canvas, ctx))
+}
+
+fn metrics_from(history: &std::collections::VecDeque<MetricSample>) -> Vec<Metric> {
+    let latest = history.back();
+    vec![
         Metric {
             canvas_id: "tele-tps",
             icon: || rsx! { icons::Gauge {} },
@@ -112,7 +206,11 @@ fn metrics_from(history: &std::collections::VecDeque<MetricSample>, peer_nicks: 
                     ))
                 })
                 .collect(),
-            value: latest.map(|s| format!("{:.0}", s.tps)).unwrap_or("—".into()),
+            // Tango's reading: measured ticks against the throttler's
+            // current target.
+            value: latest
+                .map(|s| format!("{:.2} / {:.2}", s.tps, s.fps_target))
+                .unwrap_or("—".into()),
             value_tone: latest
                 .map(|s| tone_for_tps(s.tps, s.fps_target))
                 .unwrap_or(Tone::Muted),
@@ -177,54 +275,13 @@ fn metrics_from(history: &std::collections::VecDeque<MetricSample>, peer_nicks: 
                 .map(|s| tone_for_abs(s.depth as i32, 2, 5))
                 .unwrap_or(Tone::Muted),
         },
-    ];
-
-    // One ping card per peer, captioned with the peer's nick — this is
-    // what makes the panel scale with the number of clients.
-    const PING_IDS: [&str; 3] = ["tele-ping-0", "tele-ping-1", "tele-ping-2"];
-    for (i, nick) in peer_nicks.iter().enumerate().take(PING_IDS.len()) {
-        let latest_ping = latest.and_then(|s| s.pings.get(i).copied().flatten());
-        metrics.push(Metric {
-            canvas_id: PING_IDS[i],
-            icon: || rsx! { icons::Wifi {} },
-            caption: nick.clone(),
-            fill_under: true,
-            zero: None,
-            points: history
-                .iter()
-                .map(|s| {
-                    s.pings
-                        .get(i)
-                        .copied()
-                        .flatten()
-                        .map(|ms| ((ms / PING_SPAN).clamp(0.0, 1.0), tone_for_ping(ms)))
-                })
-                .collect(),
-            value: latest_ping
-                .map(|ms| format!("{ms:.0} ms"))
-                .unwrap_or("—".into()),
-            value_tone: latest_ping.map(tone_for_ping).unwrap_or(Tone::Muted),
-        });
-    }
-    metrics
+    ]
 }
 
 /// Redraw one sparkline: a hairline trace over a recessed background,
 /// tone-coloured per segment, newest sample pinned to the right edge.
 fn draw_sparkline(canvas_id: &str, points: &Points, fill_under: bool, zero: Option<f32>) {
-    let Some(canvas) = web_sys::window()
-        .and_then(|w| w.document())
-        .and_then(|d| d.get_element_by_id(canvas_id))
-        .and_then(|el| el.dyn_into::<web_sys::HtmlCanvasElement>().ok())
-    else {
-        return;
-    };
-    let Some(ctx) = canvas
-        .get_context("2d")
-        .ok()
-        .flatten()
-        .and_then(|c| c.dyn_into::<web_sys::CanvasRenderingContext2d>().ok())
-    else {
+    let Some((canvas, ctx)) = canvas_2d(canvas_id) else {
         return;
     };
     let (w, h) = (canvas.width() as f64, canvas.height() as f64);
@@ -296,7 +353,7 @@ pub fn CableOverlay() -> Element {
     let _ = FRAME_REV.read();
     let expanded = *PANEL_OPEN.read();
 
-    let (is_netplay, skew, peer_nicks, room_code) = {
+    let (is_netplay, skew, peers, room_code) = {
         let rt = ctx.runtime.borrow();
         match rt.descriptor() {
             Some(d) if d.kind == SessionKind::Netplay => {
@@ -305,7 +362,12 @@ pub fn CableOverlay() -> Element {
                     true,
                     stats.as_ref().map(|s| s.skew).unwrap_or(0),
                     stats
-                        .map(|s| s.peers.iter().map(|p| p.nick.clone()).collect::<Vec<_>>())
+                        .map(|s| {
+                            s.peers
+                                .iter()
+                                .map(|p| (p.player, p.nick.clone()))
+                                .collect::<Vec<_>>()
+                        })
                         .unwrap_or_default(),
                     d.room_code.clone(),
                 )
@@ -314,19 +376,28 @@ pub fn CableOverlay() -> Element {
         }
     };
 
-    // Redraw the sparklines after every rendered frame while expanded.
-    let metrics_snapshot: Vec<(String, Points, bool, Option<f32>)> = if is_netplay && expanded {
+    // Redraw the sparklines (and the shared ping graph) after every
+    // rendered frame while expanded.
+    type Snapshot = (Vec<(String, Points, bool, Option<f32>)>, Vec<PingSeries>);
+    let snapshot: Snapshot = if is_netplay && expanded {
         let rt = ctx.runtime.borrow();
-        metrics_from(rt.metric_history(), &peer_nicks)
-            .into_iter()
-            .map(|m| (m.canvas_id.to_string(), m.points, m.fill_under, m.zero))
-            .collect()
+        (
+            metrics_from(rt.metric_history())
+                .into_iter()
+                .map(|m| (m.canvas_id.to_string(), m.points, m.fill_under, m.zero))
+                .collect(),
+            ping_series(rt.metric_history(), &peers),
+        )
     } else {
-        Vec::new()
+        Default::default()
     };
-    use_effect(use_reactive!(|metrics_snapshot| {
-        for (id, points, fill_under, zero) in &metrics_snapshot {
+    use_effect(use_reactive!(|snapshot| {
+        let (metrics, pings) = &snapshot;
+        for (id, points, fill_under, zero) in metrics {
             draw_sparkline(id, points, *fill_under, *zero);
+        }
+        if !pings.is_empty() {
+            draw_ping_graph("tele-ping", pings);
         }
     }));
 
@@ -340,8 +411,13 @@ pub fn CableOverlay() -> Element {
                     class: "btn status-chip",
                     onclick: move |_| *PANEL_OPEN.write() = true,
                     if is_netplay {
-                        {signal_icon(skew)}
-                        span { class: "mono", style: "color: {tone_for_abs(skew, 3, 7).css()}", "{skew:+}" }
+                        // Bars for link quality, colour for the same
+                        // reading — no number.
+                        span {
+                            class: "signal",
+                            style: "color: {tone_for_abs(skew, 3, 7).css()}",
+                            {signal_icon(skew)}
+                        }
                     } else if lobby_running {
                         icons::Gamepad2 {}
                         "Netplay lobby"
@@ -365,7 +441,10 @@ pub fn CableOverlay() -> Element {
                         RoomCode { code: code.clone() }
                     }
                     TelemetryCards { ctx_key: FRAME_REV() }
-                    DelayControl {}
+                    // A control, not a metric — visually its own group.
+                    div { class: "delay-section",
+                        DelayControl {}
+                    }
                     div { class: "menu-actions",
                         button {
                             class: "btn danger",
@@ -403,11 +482,20 @@ pub fn CableOverlay() -> Element {
 fn TelemetryCards(ctx_key: u64) -> Element {
     let ctx = use_ctx();
     let rt = ctx.runtime.borrow();
-    let peer_nicks: Vec<String> = rt
+    let peers: Vec<(usize, String)> = rt
         .shared()
-        .map(|s| s.stats.lock().unwrap().peers.iter().map(|p| p.nick.clone()).collect())
+        .map(|s| {
+            s.stats
+                .lock()
+                .unwrap()
+                .peers
+                .iter()
+                .map(|p| (p.player, p.nick.clone()))
+                .collect()
+        })
         .unwrap_or_default();
-    let metrics = metrics_from(rt.metric_history(), &peer_nicks);
+    let metrics = metrics_from(rt.metric_history());
+    let pings = ping_series(rt.metric_history(), &peers);
     rsx! {
         for m in metrics {
             div { class: "metric-card",
@@ -421,7 +509,41 @@ fn TelemetryCards(ctx_key: u64) -> Element {
                         width: "{SPARK_W}",
                         height: "{SPARK_H}",
                     }
+                }
+                // The reading sits under its chart, right-aligned —
+                // the same shape as the ping legend.
+                div { class: "metric-reading",
                     span { class: "metric-value mono", style: "color: {m.value_tone.css()}", "{m.value}" }
+                }
+            }
+        }
+        // Every peer's ping shares one graph, coloured by seat; the
+        // legend carries the readings.
+        if !pings.is_empty() {
+            div { class: "metric-card",
+                div { class: "metric-caption",
+                    icons::Wifi {}
+                    span { "Ping" }
+                }
+                div { class: "spark-row",
+                    canvas {
+                        id: "tele-ping",
+                        width: "{SPARK_W}",
+                        height: "{SPARK_H}",
+                    }
+                }
+                div { class: "ping-legend",
+                    for s in pings {
+                        div { class: "ping-peer",
+                            span { class: "dot", style: "background: {s.color}" }
+                            span { class: "nick", "{s.nick}" }
+                            span {
+                                class: "metric-value mono",
+                                style: "color: {s.latest.map(tone_for_ping).unwrap_or(Tone::Muted).css()}",
+                                {s.latest.map(|ms| format!("{ms:.0} ms")).unwrap_or("—".into())}
+                            }
+                        }
+                    }
                 }
             }
         }

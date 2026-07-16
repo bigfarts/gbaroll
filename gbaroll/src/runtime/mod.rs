@@ -492,15 +492,6 @@ impl Runtime {
         self.audio_binder.set_volume(v);
     }
 
-    pub fn toggle_pause(&mut self) {
-        let Some(shared) = self.shared() else { return };
-        if shared.paused.load(std::sync::atomic::Ordering::Acquire) {
-            shared.resume();
-        } else {
-            shared.paused.store(true, std::sync::atomic::Ordering::Release);
-        }
-    }
-
     /// Route one document-level key event. Returns true when the code
     /// is bound (the listener then preventDefaults it).
     pub fn key_event(&mut self, code: &str, pressed: bool) -> bool {

@@ -179,16 +179,69 @@ kbd {
 /* --- tab shell ------------------------------------------------------ */
 
 .shell {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    padding: 0 20px;
+}
+
+/* Play: the library and the saves sit side by side and fill the
+   window; their lists scroll internally. */
+main.play-main {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: minmax(0, 1fr) auto auto;
+    gap: 0 14px;
+    padding-bottom: 12px;
+}
+
+main.play-main .card {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+main.play-main .rom-list,
+main.play-main .save-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+main.play-main .launch-bar,
+main.play-main .dev-corner {
+    grid-column: 1 / -1;
+}
+
+main.play-main .launch-bar {
+    padding-top: 12px;
+}
+
+/* Settings keeps a readable column. */
+main.settings-main {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    width: 100%;
     max-width: 980px;
     margin: 0 auto;
-    padding: 0 16px 40px;
+    padding-bottom: 24px;
 }
 
 .topbar {
     display: flex;
     align-items: center;
     gap: 16px;
-    padding: 16px 0 14px;
+    padding-top: 12px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+}
+
+.brand,
+.identity {
+    margin-bottom: 10px;
 }
 
 .brand h1 {
@@ -196,14 +249,33 @@ kbd {
     letter-spacing: 0.02em;
 }
 
-.brand .tagline {
-    font-size: 11px;
-    color: var(--text-dim);
-}
-
+/* A real tab strip: underline indicator riding the topbar's rule. */
 .tabs {
     display: flex;
-    gap: 6px;
+    gap: 2px;
+    align-self: flex-end;
+    margin-left: 12px;
+    margin-bottom: -1px;
+}
+
+.btn.tab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    color: var(--text-dim);
+    padding: 8px 14px 10px;
+}
+
+.btn.tab:hover {
+    color: var(--text);
+    border-bottom-color: var(--border);
+}
+
+.btn.tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    font-weight: 600;
 }
 
 /* The nickname field, top-right of the shell (identity travels with
@@ -220,29 +292,13 @@ kbd {
     width: 140px;
 }
 
-.btn.tab {
-    background: transparent;
-    border-color: transparent;
-    color: var(--text-dim);
-}
-
-.btn.tab:hover {
-    color: var(--text);
-}
-
-.btn.tab.active {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--bg-deep);
-    font-weight: 600;
-}
-
+/* Informational, not an error — accent-tinted, not red. */
 .notice {
     display: flex;
     align-items: center;
     gap: 10px;
-    background: rgba(247, 118, 142, 0.12);
-    border: 1px solid var(--danger);
+    background: rgba(122, 162, 247, 0.1);
+    border: 1px solid var(--accent);
     border-radius: 8px;
     padding: 8px 8px 8px 12px;
     margin-bottom: 14px;
@@ -304,18 +360,97 @@ kbd {
 .rom-list {
     display: flex;
     flex-direction: column;
+    gap: 6px;
 }
 
-.rom-row {
+/* The two pickers share one widget: a radio-group list where each
+   row is a label around a visually-hidden radio, so click, Tab, and
+   arrow-key navigation are all native. Rows are inset option cards
+   (the lobby roster's look), so the list reads as "pick one". */
+.pick-row {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 8px 10px;
     border-radius: 8px;
+    background: var(--surface-2);
+    border: 1px solid transparent;
+    /* Uniform across the normal, renaming, and confirm-delete states —
+       swapping a row's controls must not reflow the list. */
+    min-height: 38px;
 }
 
-.rom-row:hover {
-    background: var(--surface-2);
+.pick-row:hover {
+    border-color: var(--accent);
+}
+
+.pick-row.selected {
+    border-color: var(--accent);
+    background: rgba(122, 162, 247, 0.14);
+}
+
+/* Every row reserves the checkmark's slot; only the selected row
+   inks it — geometry never shifts. */
+.pick-label::after {
+    content: "✓";
+    width: 1.1em;
+    text-align: right;
+    margin-left: auto;
+    color: transparent;
+    font-weight: 700;
+    flex: none;
+}
+
+.pick-row.selected .pick-label::after {
+    color: var(--accent);
+}
+
+/* The focus ring, when keyboard focus sits on the row's radio. */
+.pick-row:has(.pick-radio:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+}
+
+.pick-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    cursor: pointer;
+}
+
+/* Hidden but focusable: the row is the radio's label, the row ring
+   is its focus indicator. */
+.pick-radio {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.pick-label .spacer {
+    flex: 1;
+}
+
+.pick-label input.rename {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 8px;
+}
+
+.pick-label:has(input.rename) {
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
+
+.pick-label code {
+    color: var(--text);
+}
+
+.row-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-right: 10px;
 }
 
 .rom-name {
@@ -344,34 +479,33 @@ kbd {
     font-size: 11px;
 }
 
-.rom-actions {
+.save-list {
+    margin-top: 6px;
     display: flex;
-    align-items: center;
+    flex-direction: column;
     gap: 6px;
 }
 
-.save-list {
-    margin-top: 6px;
-}
-
-.save-row {
+/* Step 3: the launch bar under both pickers; grayed out until a
+   game is picked. */
+/* Caption at the left edge, the Play button at the right. */
+.launch-bar {
     display: flex;
+    flex-direction: row-reverse;
+    justify-content: space-between;
     align-items: center;
-    gap: 10px;
-    padding: 3px 0;
+    gap: 12px;
+    padding: 2px 6px;
 }
 
-.save-row code {
-    color: var(--text);
+.launch-bar .btn.launch {
+    padding: 8px 22px;
+    font-size: 14px;
 }
 
-.save-row .spacer {
-    flex: 1;
-}
-
-.save-row input.rename {
-    flex: 1;
-    min-width: 0;
+.btn:disabled {
+    opacity: 0.45;
+    cursor: default;
 }
 
 .dev-corner {
@@ -593,6 +727,43 @@ kbd {
     border: 1px solid var(--border);
 }
 
+/* Connected: the chip is just the signal glyph, colour-coded. */
+.status-chip .signal {
+    display: inline-flex;
+    font-size: 17px;
+}
+
+/* The shared ping graph's legend: seat-coloured dot, nick, reading. */
+.ping-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 5px;
+}
+
+.ping-peer {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+}
+
+/* Seat identity dots: lobby roster and ping legend alike. */
+.dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: none;
+}
+
+.ping-peer .nick {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* ---- lobby roster ---- */
 
 .roster {
@@ -651,7 +822,7 @@ kbd {
 }
 
 .tele-card {
-    width: 264px;
+    width: 292px;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -705,6 +876,20 @@ kbd {
     image-rendering: auto;
 }
 
+/* Each chart's reading, right-aligned beneath it (the ping legend's
+   shape). */
+.metric-reading {
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* Input delay is a control, not a metric: separated by a rule. */
+.delay-section {
+    border-top: 1px solid var(--border);
+    padding-top: 9px;
+    margin-top: 3px;
+}
+
 .metric-value {
     min-width: 58px;
     text-align: right;
@@ -739,6 +924,56 @@ kbd {
 .link-notice {
     color: var(--danger);
     font-size: 12px;
+}
+
+/* ---- cable panel, offline body ---- */
+
+.cable {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+
+/* Direct child only: the roster's inline "missing this ROM" tag
+   keeps its plain look. */
+.cable > .link-notice {
+    padding: 6px 9px;
+    background: rgba(247, 118, 142, 0.1);
+    border: 1px solid rgba(247, 118, 142, 0.35);
+    border-radius: 7px;
+}
+
+.btn.wide {
+    width: 100%;
+    justify-content: center;
+}
+
+.or-divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+.or-divider::before,
+.or-divider::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+}
+
+.join-row {
+    display: flex;
+    gap: 8px;
+}
+
+.join-row input {
+    flex: 1;
+    min-width: 0;
 }
 
 .cable .rtt {

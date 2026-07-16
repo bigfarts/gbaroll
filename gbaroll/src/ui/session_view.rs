@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
-use super::{cable, icons, telemetry, use_ctx, Ctx};
+use super::{cable, telemetry, use_ctx, Ctx};
 use crate::platform::input::{self, MappedKey};
 use crate::runtime::{FRAME_REV, MENU_OPEN, SESSION_EPOCH};
 use crate::session::{SessionEnd, SessionKind};
@@ -48,7 +48,7 @@ pub fn SessionView() -> Element {
     let _ = SESSION_EPOCH.read();
     let menu_open = *MENU_OPEN.read();
 
-    let (title, running, paused, status, end, caption) = {
+    let (title, running, paused, end, caption) = {
         let lib = library.read();
         let rt = runtime.borrow();
         let title = rt
@@ -68,16 +68,10 @@ pub fn SessionView() -> Element {
         let end = rt.last_end();
         match rt.shared() {
             Some(shared) => {
-                let stats = shared.stats.lock().unwrap();
                 let paused = shared.paused.load(Ordering::Relaxed);
-                let status = if paused {
-                    String::new()
-                } else {
-                    format!("frame {} · {:.1} fps", stats.frontier, stats.fps_target)
-                };
-                (title, true, paused, status, end, caption)
+                (title, true, paused, end, caption)
             }
-            None => (title, false, false, String::new(), end, caption),
+            None => (title, false, false, end, caption),
         }
     };
 
@@ -111,10 +105,11 @@ pub fn SessionView() -> Element {
                 if end.is_none() && !menu_open && running {
                     telemetry::CableOverlay {}
                 }
-                // With no header bar, the paused state needs a floating
-                // reminder when the menu isn't showing it.
+                // Pause only happens transiently (the lobby freezes the
+                // machine for its capture); the badge says why the game
+                // stopped moving.
                 if paused && !menu_open && end.is_none() {
-                    span { class: "badge pause-badge", "Paused — esc for menu" }
+                    span { class: "badge pause-badge", "Paused" }
                 }
             }
             if let Some(end) = end {
@@ -137,9 +132,6 @@ pub fn SessionView() -> Element {
                         div { class: "overlay-head",
                             h2 { "{title}" }
                             p { class: "sub", "{caption}" }
-                            if !status.is_empty() {
-                                p { class: "sub", "{status}" }
-                            }
                         }
                         div { class: "menu-volume",
                             label { "Volume · {volume_pct}%" }
@@ -160,22 +152,6 @@ pub fn SessionView() -> Element {
                                 class: "btn primary",
                                 onclick: move |_| *MENU_OPEN.write() = false,
                                 "Back to game"
-                            }
-                            if running {
-                                button {
-                                    class: "btn",
-                                    onclick: {
-                                        let runtime = runtime.clone();
-                                        move |_| runtime.borrow_mut().toggle_pause()
-                                    },
-                                    if paused {
-                                        icons::Play {}
-                                        "Resume"
-                                    } else {
-                                        icons::Pause {}
-                                        "Pause"
-                                    }
-                                }
                             }
                             button {
                                 class: "btn danger",

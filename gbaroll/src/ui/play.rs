@@ -8,6 +8,15 @@ use super::{icons, use_ctx, Ctx};
 use crate::library::{self, RomInfo};
 use crate::storage;
 
+/// The save the picker auto-selects for a game: the one whose stem is
+/// the game's display name (the write-back default).
+fn matching_save(saves: &[String], display: &str) -> Option<String> {
+    saves
+        .iter()
+        .find(|s| stem_of(s).eq_ignore_ascii_case(display))
+        .cloned()
+}
+
 /// Split a save's file name around its final dot.
 fn stem_of(name: &str) -> &str {
     name.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(name)
@@ -31,6 +40,10 @@ pub fn PlayScreen() -> Element {
     } = use_ctx();
 
     let mut search = use_signal(String::new);
+    let mut save_search = use_signal(String::new);
+    // Launching is two picks and a click: pick a game (auto-picks its
+    // matching save), adjust the save if wanted, hit Play.
+    let mut selected_game = use_signal(|| Option::<u32>::None);
     // Deleting a ROM or save is irreversible, so it takes two clicks:
     // arm on the row, then confirm in place.
     let mut pending_delete = use_signal(|| Option::<String>::None);
@@ -62,6 +75,25 @@ pub fn PlayScreen() -> Element {
         n => format!("{n} games"),
     };
 
+    let save_needle = save_search.read().to_ascii_lowercase();
+    let filtered_saves: Vec<String> = saves
+        .iter()
+        .filter(|s| save_needle.is_empty() || s.to_ascii_lowercase().contains(&save_needle))
+        .cloned()
+        .collect();
+
+    let selected_info: Option<RomInfo> = selected_game
+        .read()
+        .and_then(|crc| roms.iter().find(|r| r.crc32 == crc).cloned());
+    let launch_caption = match &selected_info {
+        Some(info) => format!(
+            "{} · {}",
+            info.display_name(),
+            selected_save.read().as_deref().unwrap_or("fresh save")
+        ),
+        None => "Pick a game to play.".to_string(),
+    };
+
     rsx! {
         section { class: "card",
             div { class: "card-head",
@@ -73,19 +105,19 @@ pub fn PlayScreen() -> Element {
                 }
                 label { class: "btn primary file-btn",
                     icons::Upload {}
-                    "Import…"
+                    "Import ROMs…"
                     input {
                         r#type: "file",
-                        accept: ".gba,.agb,.srl,.sav,.sa1,.srm",
+                        accept: ".gba,.agb,.srl",
                         multiple: true,
                         onchange: move |evt| {
                             let storage = storage_res.read().clone().flatten();
                             async move {
                                 let Some(storage) = storage else { return };
-                                let (r, s, skipped) =
+                                let (r, _, skipped) =
                                     crate::web::import_files(&storage, evt.files()).await;
                                 notice.set(Some(format!(
-                                    "Imported {r} ROM(s) and {s} save(s), skipped {skipped}."
+                                    "Imported {r} ROM(s), skipped {skipped}."
                                 )));
                                 *library_rev.write() += 1;
                             }
@@ -115,64 +147,48 @@ pub fn PlayScreen() -> Element {
                 }
             } else {
                 div { class: "rom-list",
+                    // One radio group: native click, Tab, and arrow-key
+                    // behavior — the radio itself is visually hidden,
+                    // the row is its label.
                     for rom in filtered {
-                        div { class: "rom-row",
-                            div { class: "rom-name",
-                                span { class: "game", "{rom.display_name()}" }
-                                span { class: "rom-meta",
-                                    "{rom.code} · "
-                                    code { {format!("{:08x}", rom.crc32)} }
-                                    " · {rom.size / 1024} KiB"
-                                }
-                            }
-                            div { class: "rom-actions",
-                                button {
-                                    class: "btn primary",
-                                    onclick: {
-                                        let runtime = runtime.clone();
-                                        let info = rom.clone();
+                        div {
+                            class: if *selected_game.read() == Some(rom.crc32) { "pick-row selected" } else { "pick-row" },
+                            label { class: "pick-label",
+                                input {
+                                    r#type: "radio",
+                                    name: "game-pick",
+                                    class: "pick-radio",
+                                    checked: *selected_game.read() == Some(rom.crc32),
+                                    // Step 1: pick the game. Its matching
+                                    // save (same stem as the display name)
+                                    // comes along; no match = fresh save.
+                                    onchange: {
+                                        let crc = rom.crc32;
+                                        let display = rom.display_name().to_string();
+                                        let saves = saves.clone();
                                         move |_| {
-                                            let runtime = runtime.clone();
-                                            let info = info.clone();
-                                            let storage = storage_res.read().clone().flatten();
-                                            let save_name = selected_save.read().clone();
-                                            spawn(async move {
-                                                let Some(storage) = storage else { return };
-                                                let bytes = match library::read_rom(&storage, &info).await {
-                                                    Ok(b) => b,
-                                                    Err(e) => {
-                                                        notice.set(Some(format!("{e:#}")));
-                                                        return;
-                                                    }
-                                                };
-                                                let save = match &save_name {
-                                                    Some(name) => {
-                                                        storage::read(storage.saves(), name).await.ok().flatten()
-                                                    }
-                                                    None => None,
-                                                };
-                                                // SRAM writes back into the picked save, or a
-                                                // fresh "<name>.sav" the first time it persists.
-                                                let save_file = save_name.clone().unwrap_or_else(|| {
-                                                    format!("{}.sav", info.display_name())
-                                                });
-                                                if let Err(e) =
-                                                    crate::web::boot(runtime, bytes, save, Some(save_file)).await
-                                                {
-                                                    notice.set(Some(format!("couldn't start session: {e:#}")));
-                                                }
-                                            });
+                                            selected_game.set(Some(crc));
+                                            selected_save.set(matching_save(&saves, &display));
                                         }
                                     },
-                                    icons::Play {}
-                                    "Play"
                                 }
+                                div { class: "rom-name",
+                                    span { class: "game", "{rom.display_name()}" }
+                                    span { class: "rom-meta",
+                                        "{rom.code} · "
+                                        code { {format!("{:08x}", rom.crc32)} }
+                                        " · {rom.size / 1024} KiB"
+                                    }
+                                }
+                            }
+                            div { class: "row-actions",
                                 if pending_delete.read().as_deref() == Some(rom.file_name.as_str()) {
                                     button {
                                         class: "btn danger",
                                         onclick: {
                                             let file_name = rom.file_name.clone();
-                                            move |_| {
+                                            move |evt: MouseEvent| {
+                                                evt.stop_propagation();
                                                 let storage = storage_res.read().clone().flatten();
                                                 let file_name = file_name.clone();
                                                 async move {
@@ -193,7 +209,10 @@ pub fn PlayScreen() -> Element {
                                     }
                                     button {
                                         class: "btn",
-                                        onclick: move |_| pending_delete.set(None),
+                                        onclick: move |evt: MouseEvent| {
+                                            evt.stop_propagation();
+                                            pending_delete.set(None);
+                                        },
                                         "Cancel"
                                     }
                                 } else {
@@ -202,7 +221,10 @@ pub fn PlayScreen() -> Element {
                                         title: "Delete {rom.display_name()}",
                                         onclick: {
                                             let file_name = rom.file_name.clone();
-                                            move |_| pending_delete.set(Some(file_name.clone()))
+                                            move |evt: MouseEvent| {
+                                                evt.stop_propagation();
+                                                pending_delete.set(Some(file_name.clone()));
+                                            }
                                         },
                                         icons::Trash2 {}
                                     }
@@ -217,44 +239,75 @@ pub fn PlayScreen() -> Element {
             div { class: "card-head",
                 div {
                     h2 { "Save data" }
-                    p { class: "sub", "The picked save applies to the next game you start." }
+                    p { class: "sub", "Step 2: the picked save applies to the game you start." }
                 }
-            }
-            div { class: "field",
-                label { "Save for the next boot" }
-                select {
-                    onchange: move |evt| {
-                        let v = evt.value();
-                        selected_save.set(if v.is_empty() { None } else { Some(v) });
-                    },
-                    option { value: "", selected: selected_save.read().is_none(), "(fresh save)" }
-                    for save in saves.iter() {
-                        option {
-                            value: "{save}",
-                            selected: selected_save.read().as_deref() == Some(save.as_str()),
-                            "{save}"
-                        }
+                label { class: "btn primary file-btn",
+                    icons::Upload {}
+                    "Import saves…"
+                    input {
+                        r#type: "file",
+                        accept: ".sav,.sa1,.srm",
+                        multiple: true,
+                        onchange: move |evt| {
+                            let storage = storage_res.read().clone().flatten();
+                            async move {
+                                let Some(storage) = storage else { return };
+                                let (_, s, skipped) =
+                                    crate::web::import_files(&storage, evt.files()).await;
+                                notice.set(Some(format!(
+                                    "Imported {s} save(s), skipped {skipped}."
+                                )));
+                                *library_rev.write() += 1;
+                            }
+                        },
                     }
                 }
             }
-            if !saves.is_empty() {
-                div { class: "save-list",
-                    for save in saves.clone() {
-                        div { class: "save-row",
-                            if rename_target.read().as_deref() == Some(save.as_str()) {
+            input {
+                class: "search",
+                placeholder: "Search saves…",
+                value: "{save_search}",
+                oninput: move |evt: FormEvent| save_search.set(evt.value()),
+            }
+            div { class: "save-list",
+                // The same radio-group widget as the game library; a
+                // fresh save is its own row rather than a dropdown
+                // special case.
+                div {
+                    class: if selected_save.read().is_none() { "pick-row selected" } else { "pick-row" },
+                    label { class: "pick-label",
+                        input {
+                            r#type: "radio",
+                            name: "save-pick",
+                            class: "pick-radio",
+                            checked: selected_save.read().is_none(),
+                            onchange: move |_| selected_save.set(None),
+                        }
+                        span { class: "sub", "(fresh save)" }
+                    }
+                }
+                for save in filtered_saves {
+                    div {
+                        class: if selected_save.read().as_deref() == Some(save.as_str()) { "pick-row selected" } else { "pick-row" },
+                        if rename_target.read().as_deref() == Some(save.as_str()) {
+                            div { class: "pick-label",
                                 // Renaming: edit the stem, keep the extension.
                                 input {
                                     class: "rename",
                                     value: "{rename_value}",
+                                    onclick: move |evt: MouseEvent| evt.stop_propagation(),
                                     oninput: move |evt: FormEvent| rename_value.set(evt.value()),
                                 }
                                 code { {format!(".{}", ext_of(&save))} }
+                            }
+                            div { class: "row-actions",
                                 button {
                                     class: "btn primary",
                                     disabled: rename_value.read().trim().is_empty(),
                                     onclick: {
                                         let save = save.clone();
-                                        move |_| {
+                                        move |evt: MouseEvent| {
+                                            evt.stop_propagation();
                                             let storage = storage_res.read().clone().flatten();
                                             let save = save.clone();
                                             let to = format!(
@@ -286,17 +339,24 @@ pub fn PlayScreen() -> Element {
                                 }
                                 button {
                                     class: "btn",
-                                    onclick: move |_| rename_target.set(None),
+                                    onclick: move |evt: MouseEvent| {
+                                        evt.stop_propagation();
+                                        rename_target.set(None);
+                                    },
                                     "Cancel"
                                 }
-                            } else if pending_save_delete.read().as_deref() == Some(save.as_str()) {
+                            }
+                        } else if pending_save_delete.read().as_deref() == Some(save.as_str()) {
+                            div { class: "pick-label",
                                 code { "{save}" }
-                                span { class: "spacer" }
+                            }
+                            div { class: "row-actions",
                                 button {
                                     class: "btn danger",
                                     onclick: {
                                         let save = save.clone();
-                                        move |_| {
+                                        move |evt: MouseEvent| {
+                                            evt.stop_propagation();
                                             let storage = storage_res.read().clone().flatten();
                                             let save = save.clone();
                                             async move {
@@ -321,18 +381,35 @@ pub fn PlayScreen() -> Element {
                                 }
                                 button {
                                     class: "btn",
-                                    onclick: move |_| pending_save_delete.set(None),
+                                    onclick: move |evt: MouseEvent| {
+                                        evt.stop_propagation();
+                                        pending_save_delete.set(None);
+                                    },
                                     "Cancel"
                                 }
-                            } else {
+                            }
+                        } else {
+                            label { class: "pick-label",
+                                input {
+                                    r#type: "radio",
+                                    name: "save-pick",
+                                    class: "pick-radio",
+                                    checked: selected_save.read().as_deref() == Some(save.as_str()),
+                                    onchange: {
+                                        let save = save.clone();
+                                        move |_| selected_save.set(Some(save.clone()))
+                                    },
+                                }
                                 code { "{save}" }
-                                span { class: "spacer" }
+                            }
+                            div { class: "row-actions",
                                 button {
                                     class: "btn ghost icon-btn",
                                     title: "Rename",
                                     onclick: {
                                         let save = save.clone();
-                                        move |_| {
+                                        move |evt: MouseEvent| {
+                                            evt.stop_propagation();
                                             rename_value.set(stem_of(&save).to_string());
                                             rename_target.set(Some(save.clone()));
                                             pending_save_delete.set(None);
@@ -344,7 +421,8 @@ pub fn PlayScreen() -> Element {
                                     class: "btn ghost",
                                     onclick: {
                                         let save = save.clone();
-                                        move |_| {
+                                        move |evt: MouseEvent| {
+                                            evt.stop_propagation();
                                             let storage = storage_res.read().clone().flatten();
                                             let save = save.clone();
                                             async move {
@@ -364,7 +442,8 @@ pub fn PlayScreen() -> Element {
                                     title: "Delete",
                                     onclick: {
                                         let save = save.clone();
-                                        move |_| {
+                                        move |evt: MouseEvent| {
+                                            evt.stop_propagation();
                                             pending_save_delete.set(Some(save.clone()));
                                             rename_target.set(None);
                                         }
@@ -376,6 +455,52 @@ pub fn PlayScreen() -> Element {
                     }
                 }
             }
+        }
+        // Step 3: the launch bar, grayed out until a game is picked.
+        div { class: "launch-bar",
+                button {
+                    class: "btn primary launch",
+                    disabled: selected_info.is_none(),
+                    onclick: {
+                        let runtime = runtime.clone();
+                        let info = selected_info.clone();
+                        move |_| {
+                            let Some(info) = info.clone() else { return };
+                            let runtime = runtime.clone();
+                            let storage = storage_res.read().clone().flatten();
+                            let save_name = selected_save.read().clone();
+                            spawn(async move {
+                                let Some(storage) = storage else { return };
+                                let bytes = match library::read_rom(&storage, &info).await {
+                                    Ok(b) => b,
+                                    Err(e) => {
+                                        notice.set(Some(format!("{e:#}")));
+                                        return;
+                                    }
+                                };
+                                let save = match &save_name {
+                                    Some(name) => {
+                                        storage::read(storage.saves(), name).await.ok().flatten()
+                                    }
+                                    None => None,
+                                };
+                                // SRAM writes back into the picked save, or a
+                                // fresh "<name>.sav" the first time it persists.
+                                let save_file = save_name.clone().unwrap_or_else(|| {
+                                    format!("{}.sav", info.display_name())
+                                });
+                                if let Err(e) =
+                                    crate::web::boot(runtime, bytes, save, Some(save_file)).await
+                                {
+                                    notice.set(Some(format!("couldn't start session: {e:#}")));
+                                }
+                            });
+                        }
+                    },
+                    icons::Play {}
+                    "Play"
+                }
+                span { class: "sub", "{launch_caption}" }
         }
         div { class: "dev-corner",
             span { "Game database: {dat_names} No-Intro name(s)" }
@@ -397,25 +522,6 @@ pub fn PlayScreen() -> Element {
                 },
                 icons::RefreshCw {}
                 "Update game database"
-            }
-            span { class: "spacer" }
-            button {
-                class: "btn ghost",
-                onclick: {
-                    let runtime = runtime.clone();
-                    move |_| {
-                        let runtime = runtime.clone();
-                        spawn(async move {
-                            if let Err(e) =
-                                crate::web::boot(runtime, mgba_siolink::testrom::build(), None, None)
-                                    .await
-                            {
-                                notice.set(Some(format!("couldn't start session: {e:#}")));
-                            }
-                        });
-                    }
-                },
-                "Boot test ROM"
             }
         }
     }

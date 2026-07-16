@@ -129,19 +129,6 @@ fn Shell() -> Element {
             header { class: "topbar",
                 div { class: "brand",
                     h1 { "gbaroll" }
-                    span { class: "tagline", "GBA link play, without the cable" }
-                }
-                // Identity lives on the main page: this is the name the
-                // roster shows to other players.
-                label { class: "identity",
-                    icons::User {}
-                    input {
-                        value: "{nick}",
-                        placeholder: "nickname",
-                        oninput: move |evt: FormEvent| {
-                            config.with_mut(|c| c.nick = evt.value())
-                        },
-                    }
                 }
                 nav { class: "tabs",
                     button {
@@ -159,6 +146,18 @@ fn Shell() -> Element {
                         "Settings"
                     }
                 }
+                // Identity lives on the main page: this is the name the
+                // roster shows to other players.
+                label { class: "identity",
+                    icons::User {}
+                    input {
+                        value: "{nick}",
+                        placeholder: "nickname",
+                        oninput: move |evt: FormEvent| {
+                            config.with_mut(|c| c.nick = evt.value())
+                        },
+                    }
+                }
             }
             if let Some(message) = notice.read().clone() {
                 div { class: "notice",
@@ -172,6 +171,7 @@ fn Shell() -> Element {
                 }
             }
             main {
+                class: if current == Tab::Play { "play-main" } else { "settings-main" },
                 if current == Tab::Play {
                     play::PlayScreen {}
                 } else {

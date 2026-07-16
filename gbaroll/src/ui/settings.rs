@@ -26,15 +26,7 @@ const MAPPED_KEYS: [(MappedKey, &str); 11] = [
 
 #[component]
 pub fn SettingsScreen() -> Element {
-    let Ctx {
-        mut config,
-        storage: storage_res,
-        dat,
-        ..
-    } = use_ctx();
-
-    let mut updating = use_signal(|| false);
-    let mut update_error = use_signal(|| Option::<String>::None);
+    let Ctx { mut config, .. } = use_ctx();
 
     // Apply captured bindings. The Config is the source of truth; the
     // shell's sync effect mirrors it into the runtime's mapping.
@@ -79,17 +71,6 @@ pub fn SettingsScreen() -> Element {
         )
     };
 
-    let dat_len = dat.read().as_ref().map(|d| d.len()).unwrap_or(0);
-    let dat_status = if updating() {
-        "Updating game names…".to_string()
-    } else if let Some(e) = update_error.read().as_ref() {
-        format!("Update failed: {e}")
-    } else if dat_len == 0 {
-        "Game names unavailable".to_string()
-    } else {
-        format!("{dat_len} game names loaded")
-    };
-
     rsx! {
         section { class: "card",
             h2 { "Netplay" }
@@ -105,36 +86,6 @@ pub fn SettingsScreen() -> Element {
                 }
             }
             p { class: "sub", "Rooms are created and joined through this server." }
-        }
-        section { class: "card",
-            h2 { "Game database" }
-            p { class: "sub", "Proper game names come from the No-Intro database." }
-            div { class: "field",
-                span { class: "status", "{dat_status}" }
-                button {
-                    class: "btn",
-                    disabled: updating(),
-                    onclick: move |_| {
-                        let storage = storage_res.read().clone().flatten();
-                        async move {
-                            let mut dat = dat;
-                            let Some(storage) = storage else {
-                                update_error.set(Some("browser storage unavailable".to_string()));
-                                return;
-                            };
-                            updating.set(true);
-                            update_error.set(None);
-                            match crate::nointro::fetch_gba_dat(&storage).await {
-                                Ok(_) => dat.restart(),
-                                Err(e) => update_error.set(Some(format!("{e:#}"))),
-                            }
-                            updating.set(false);
-                        }
-                    },
-                    icons::RefreshCw {}
-                    if updating() { "Updating…" } else { "Download latest" }
-                }
-            }
         }
         section { class: "card",
             h2 { "Video / audio" }
