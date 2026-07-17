@@ -204,6 +204,7 @@ impl Runtime {
         install_keyboard(Rc::downgrade(&runtime));
         install_beforeunload(Rc::downgrade(&runtime));
         install_focus_release(Rc::downgrade(&runtime));
+        crate::platform::wakelock::install();
         runtime
     }
 
@@ -365,6 +366,7 @@ impl Runtime {
         // frame — the canvas keeps the outgoing session's image across
         // plug-in/unplug swaps instead of flashing the blank vbuf.
         self.presented_rev = 0;
+        crate::platform::wakelock::set_active(true);
         *SESSION_EPOCH.write() += 1;
     }
 
@@ -469,6 +471,7 @@ impl Runtime {
         self.saved_crc = None;
         self.audio_binding = None;
         *MENU_OPEN.write() = false;
+        crate::platform::wakelock::set_active(false);
         if self.session.take().is_some() {
             *SESSION_EPOCH.write() += 1;
         }

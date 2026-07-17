@@ -123,7 +123,6 @@ pub struct MetricSample {
     pub skew: i32,
     pub lead: i32,
     pub depth: u32,
-    pub slices: u32,
     pub pings: Vec<Option<f32>>,
 }
 
@@ -135,7 +134,6 @@ impl MetricSample {
             skew: stats.skew,
             lead: stats.queue_len as i32,
             depth: stats.rolled_back,
-            slices: stats.slices_peak,
             pings: stats.peers.iter().map(|p| p.rtt_ms).collect(),
         }
     }

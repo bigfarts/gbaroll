@@ -21,14 +21,7 @@ const TPS_SPAN: f32 = 8.0; // ticks/sec below target
 const SKEW_SPAN: f32 = 8.0; // ± ticks
 const LEAD_SPAN: f32 = 24.0; // unmatched local ticks
 const DEPTH_SPAN: f32 = 8.0; // rolled-back ticks
-const SLICES_SPAN: f32 = 8_000.0; // sio run_loop slices per tick
 const PING_SPAN: f32 = 200.0; // ms
-
-// Slice tone thresholds: measured peaks on a maximally chatty link are
-// ~1.6K (2p) / ~3.2K (4p); the engine errors out at 100K. A sustained
-// climb through amber is the lockstep-livelock early-warning.
-const SLICES_GOOD: i32 = 4_000;
-const SLICES_WARN: i32 = 20_000;
 
 /// Sparkline backing store (CSS stretches the width).
 const SPARK_W: u32 = 180;
@@ -201,7 +194,7 @@ fn metrics_from(history: &std::collections::VecDeque<MetricSample>) -> Vec<Metri
         Metric {
             canvas_id: "tele-tps",
             icon: || rsx! { icons::Gauge {} },
-            caption: "Ticks/sec".to_string(),
+            caption: "Tick/s (current/max)".to_string(),
             fill_under: true,
             zero: None,
             points: history
@@ -265,7 +258,7 @@ fn metrics_from(history: &std::collections::VecDeque<MetricSample>) -> Vec<Metri
         Metric {
             canvas_id: "tele-depth",
             icon: || rsx! { icons::GitMerge {} },
-            caption: "Rollback".to_string(),
+            caption: "Misprediction depth".to_string(),
             fill_under: true,
             zero: None,
             points: history
@@ -280,26 +273,6 @@ fn metrics_from(history: &std::collections::VecDeque<MetricSample>) -> Vec<Metri
             value: latest.map(|s| format!("{}", s.depth)).unwrap_or("—".into()),
             value_tone: latest
                 .map(|s| tone_for_abs(s.depth as i32, 2, 5))
-                .unwrap_or(Tone::Muted),
-        },
-        Metric {
-            canvas_id: "tele-slices",
-            icon: || rsx! { icons::Activity {} },
-            caption: "Sio slices".to_string(),
-            fill_under: true,
-            zero: None,
-            points: history
-                .iter()
-                .map(|s| {
-                    Some((
-                        (s.slices as f32 / SLICES_SPAN).clamp(0.0, 1.0),
-                        tone_for_abs(s.slices as i32, SLICES_GOOD, SLICES_WARN),
-                    ))
-                })
-                .collect(),
-            value: latest.map(|s| format!("{}", s.slices)).unwrap_or("—".into()),
-            value_tone: latest
-                .map(|s| tone_for_abs(s.slices as i32, SLICES_GOOD, SLICES_WARN))
                 .unwrap_or(Tone::Muted),
         },
     ]
@@ -502,7 +475,7 @@ fn TelemetryCards(ctx_key: u64) -> Element {
             div { class: "metric-card",
                 div { class: "metric-caption",
                     icons::Wifi {}
-                    span { "Ping" }
+                    span { "Network latency" }
                 }
                 div { class: "spark-row",
                     canvas {
@@ -618,7 +591,7 @@ fn DelayControl() -> Element {
         div { class: "metric-card",
             div { class: "metric-caption",
                 icons::Timer {}
-                span { "Input delay" }
+                span { "Frame delay" }
                 span { class: "metric-value mono", "{present_delay}" }
             }
             div { class: "delay-row",
