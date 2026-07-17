@@ -372,6 +372,22 @@ pub fn CableBody() -> Element {
                                     // every ROM in the roster.
                                     span { class: "link-notice", "missing a ROM" }
                                 }
+                                if ui.my_idx == 0 && idx != 0 && !ui.starting {
+                                    // The host's eject control. Kicks
+                                    // address the stable seat token, so
+                                    // one racing a departure bounces
+                                    // rather than hitting whoever slid
+                                    // into this row.
+                                    button {
+                                        class: "btn ghost icon-btn kick-btn",
+                                        title: "Remove this player",
+                                        onclick: {
+                                            let seat = player.seat;
+                                            move |_| send_cmd(LobbyCommand::Kick { seat })
+                                        },
+                                        icons::X {}
+                                    }
+                                }
                             }
                         } else {
                             div { class: "roster-row empty",

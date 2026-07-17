@@ -1194,6 +1194,20 @@ main.settings-main .card:last-child {
     margin-left: auto;
 }
 
+/* The host's per-seat eject control: pushed to the row's edge, or snug
+   after a notice that already pushed itself there. The negative
+   vertical margin keeps the button from stretching the row. */
+.roster-row .kick-btn {
+    margin-left: auto;
+    padding: 3px;
+    margin-top: -3px;
+    margin-bottom: -3px;
+}
+
+.roster-row .link-notice + .kick-btn {
+    margin-left: 0;
+}
+
 .tele-card {
     width: 292px;
     background: var(--bg);

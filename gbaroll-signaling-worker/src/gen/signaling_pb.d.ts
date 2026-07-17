@@ -79,6 +79,12 @@ export declare type ClientMessage = Message<"gbaroll.signaling.ClientMessage"> &
      */
     value: Leave;
     case: "leave";
+  } | {
+    /**
+     * @generated from field: gbaroll.signaling.KickPlayer kick_player = 7;
+     */
+    value: KickPlayer;
+    case: "kickPlayer";
   } | { case: undefined; value?: undefined };
 };
 
@@ -281,6 +287,33 @@ export declare type Leave = Message<"gbaroll.signaling.Leave"> & {
 export declare const LeaveSchema: GenMessage<Leave>;
 
 /**
+ * Host only: throw a player out of the lobby, addressed by their stable
+ * `seat` token (see PlayerInfo) — NOT the roster position, which
+ * compacts as people come and go: a kick racing a departure must never
+ * land on whoever slid into the vacated slot. A seat that's already
+ * gone just bounces (MALFORMED), as does the current host's own seat
+ * (whoever holds roster position 0 can't be kicked — that includes the
+ * sender themselves). The kicked player gets Error(KICKED) and is
+ * disconnected; everyone else sees the shrunken Roster (an occupancy
+ * change, so ready flags reset as usual). Meaningless once the room has
+ * started.
+ *
+ * @generated from message gbaroll.signaling.KickPlayer
+ */
+export declare type KickPlayer = Message<"gbaroll.signaling.KickPlayer"> & {
+  /**
+   * @generated from field: uint32 seat = 1;
+   */
+  seat: number;
+};
+
+/**
+ * Describes the message gbaroll.signaling.KickPlayer.
+ * Use `create(KickPlayerSchema)` to create a new message.
+ */
+export declare const KickPlayerSchema: GenMessage<KickPlayer>;
+
+/**
  * An opaque peer signal (SDP/candidate) relayed through the server.
  * Only meaningful once the room has started. Client→server, `peer` is
  * the recipient's player index; server→client, the sender's.
@@ -444,6 +477,16 @@ export declare type PlayerInfo = Message<"gbaroll.signaling.PlayerInfo"> & {
    * @generated from field: string rom_title = 4;
    */
   romTitle: string;
+
+  /**
+   * A stable per-room seat token: assigned at join, never reused for
+   * the room's lifetime. Roster positions compact when someone leaves;
+   * seats don't move — they're the addressing vocabulary for
+   * KickPlayer.
+   *
+   * @generated from field: uint32 seat = 5;
+   */
+  seat: number;
 };
 
 /**
@@ -595,6 +638,15 @@ export enum ErrorKind {
    * @generated from enum value: ERROR_KIND_INTERNAL = 8;
    */
   INTERNAL = 8,
+
+  /**
+   * Not a rejected request: the host threw you out of the lobby. Sent
+   * to the kicked player right before the server closes their
+   * connection.
+   *
+   * @generated from enum value: ERROR_KIND_KICKED = 9;
+   */
+  KICKED = 9,
 }
 
 /**

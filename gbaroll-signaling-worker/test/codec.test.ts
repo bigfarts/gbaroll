@@ -14,6 +14,7 @@ import {
   type ServerMessage,
   clientCreateRoom,
   clientJoinRoom,
+  clientKickPlayer,
   clientLeave,
   clientSetReady,
   clientSignal,
@@ -61,6 +62,7 @@ const CLIENT_FIXTURES: [string, string, ClientMessage][] = [
   ["start", "2200", clientStart()],
   ["signal", "2a0808021204000102ff", clientSignal(2, new Uint8Array([0, 1, 2, 255]))],
   ["leave", "3200", clientLeave()],
+  ["kick_player", "3a020802", clientKickPlayer(2)],
 ];
 
 const SERVER_FIXTURES: [string, string, ServerMessage][] = [
@@ -83,11 +85,12 @@ const SERVER_FIXTURES: [string, string, ServerMessage][] = [
   ["room_joined", "1a080a06414232433344", serverRoomJoined("AB2C3D")],
   [
     "roster",
-    "22240a180a04686f7374100118effdb6f50d22084147422d42544d4a0a060a02703218041001",
+    "22260a180a04686f7374100118effdb6f50d22084147422d42544d4a0a080a027032180428031001",
     serverRoster(
       [
-        { nick: "host", ready: true, romCrc32: 0xdeadbeef, romTitle: "AGB-BTMJ" },
-        { nick: "p2", ready: false, romCrc32: 4, romTitle: "" },
+        { nick: "host", ready: true, romCrc32: 0xdeadbeef, romTitle: "AGB-BTMJ", seat: 0 },
+        // A seat ahead of the position: two earlier joiners left.
+        { nick: "p2", ready: false, romCrc32: 4, romTitle: "", seat: 3 },
       ],
       1,
     ),
@@ -110,6 +113,7 @@ const SERVER_FIXTURES: [string, string, ServerMessage][] = [
     "421e0806121a6e65656420322b20706c61796572732c20616c6c207265616479",
     serverError(ErrorKind.NOT_EVERYONE_READY, "need 2+ players, all ready"),
   ],
+  ["error_kicked", "42020809", serverError(ErrorKind.KICKED, "")],
 ];
 
 test("client messages match the Rust (prost) wire bytes", () => {

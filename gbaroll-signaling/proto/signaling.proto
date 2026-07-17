@@ -36,6 +36,7 @@ message ClientMessage {
     Start start = 4;
     Signal signal = 5;
     Leave leave = 6;
+    KickPlayer kick_player = 7;
   }
 }
 
@@ -88,6 +89,20 @@ message Start {}
 // connection on receipt.
 message Leave {}
 
+// Host only: throw a player out of the lobby, addressed by their stable
+// `seat` token (see PlayerInfo) — NOT the roster position, which
+// compacts as people come and go: a kick racing a departure must never
+// land on whoever slid into the vacated slot. A seat that's already
+// gone just bounces (MALFORMED), as does the current host's own seat
+// (whoever holds roster position 0 can't be kicked — that includes the
+// sender themselves). The kicked player gets Error(KICKED) and is
+// disconnected; everyone else sees the shrunken Roster (an occupancy
+// change, so ready flags reset as usual). Meaningless once the room has
+// started.
+message KickPlayer {
+  uint32 seat = 1;
+}
+
 // An opaque peer signal (SDP/candidate) relayed through the server.
 // Only meaningful once the room has started. Client→server, `peer` is
 // the recipient's player index; server→client, the sender's.
@@ -138,6 +153,11 @@ message PlayerInfo {
   // Raw cartridge-header title. Clients should resolve `rom_crc32`
   // through their own game-name database for presentation.
   string rom_title = 4;
+  // A stable per-room seat token: assigned at join, never reused for
+  // the room's lifetime. Roster positions compact when someone leaves;
+  // seats don't move — they're the addressing vocabulary for
+  // KickPlayer.
+  uint32 seat = 5;
 }
 
 // The room is locked and the session begins. Every peer builds the same
@@ -181,4 +201,8 @@ enum ErrorKind {
   ERROR_KIND_NOT_EVERYONE_READY = 6;
   ERROR_KIND_MALFORMED = 7;
   ERROR_KIND_INTERNAL = 8;
+  // Not a rejected request: the host threw you out of the lobby. Sent
+  // to the kicked player right before the server closes their
+  // connection.
+  ERROR_KIND_KICKED = 9;
 }

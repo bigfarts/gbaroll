@@ -145,3 +145,9 @@ export function clientSignal(to: number, payload: Uint8Array): ClientMessage {
 export function clientLeave(): ClientMessage {
   return create(ClientMessageSchema, { msg: { case: "leave", value: {} } });
 }
+
+/** Host only: throw the player holding `seat` (the stable roster
+ * token, not the compacting position) out of the lobby. */
+export function clientKickPlayer(seat: number): ClientMessage {
+  return create(ClientMessageSchema, { msg: { case: "kickPlayer", value: { seat } } });
+}

@@ -16,6 +16,7 @@ import {
   type ServerMessage,
   clientCreateRoom,
   clientJoinRoom,
+  clientKickPlayer,
   clientLeave,
   clientSetReady,
   clientSignal,
@@ -205,5 +206,62 @@ e.send(clientJoinRoom(lobby.code, "eve", 1, "X"));
 const gone = await e.expect("error");
 assert(gone.kind === ErrorKind.ROOM_NOT_FOUND, "lobby deleted once its last member left");
 e.close();
+
+// --- the host kicks; nobody else does ---
+const f = await Client.connect(URL);
+await f.expect("hello");
+f.send(clientCreateRoom("frank", 1, "X"));
+const kickRoom = await f.expect("roomCreated");
+roster = await f.expect("roster");
+assert(roster.players[0].seat === 0, "host holds seat 0");
+const g = await Client.connect(URL);
+await g.expect("hello");
+g.send(clientJoinRoom(kickRoom.code, "grace", 1, "X"));
+await g.expect("roomJoined");
+roster = await g.expect("roster");
+const graceSeat = roster.players[1].seat;
+assert(graceSeat === 1, "joiner assigned the next seat");
+await f.expect("roster");
+g.send(clientKickPlayer(0));
+const notHostKick = await g.expect("error");
+assert(notHostKick.kind === ErrorKind.NOT_HOST, "non-host can't kick");
+f.send(clientKickPlayer(0));
+const selfKick = await f.expect("error");
+assert(selfKick.kind === ErrorKind.MALFORMED, "host can't kick themselves");
+f.send(clientKickPlayer(99));
+const wildKick = await f.expect("error");
+assert(wildKick.kind === ErrorKind.MALFORMED, "unknown seat bounced");
+f.send(clientKickPlayer(graceSeat));
+const kicked = await g.expect("error");
+assert(kicked.kind === ErrorKind.KICKED, "kicked player told why");
+await g.expectClosed();
+console.log("  ok: kicked player disconnected");
+roster = await f.expect("roster");
+assert(roster.players.length === 1, "host sees the seat freed");
+
+// --- the room stays joinable after a kick; seats never get reused ---
+const h = await Client.connect(URL);
+await h.expect("hello");
+h.send(clientJoinRoom(kickRoom.code, "heidi", 1, "X"));
+await h.expect("roomJoined");
+roster = await h.expect("roster");
+assert(roster.players.length === 2 && roster.yourIdx === 1, "room joinable after a kick");
+const heidiSeat = roster.players[1].seat;
+assert(heidiSeat === 2, "the kicked seat isn't reissued");
+await f.expect("roster");
+
+// --- a kick racing a departure can't hit the wrong player: Heidi
+// slides into Grace's old position, but Grace's seat just bounces ---
+f.send(clientKickPlayer(graceSeat));
+const staleKick = await f.expect("error");
+assert(staleKick.kind === ErrorKind.MALFORMED, "stale kick bounces off the slid-in player");
+f.send(clientKickPlayer(heidiSeat));
+const kicked2 = await h.expect("error");
+assert(kicked2.kind === ErrorKind.KICKED, "seat-addressed kick hits the intended player");
+await h.expectClosed();
+roster = await f.expect("roster");
+assert(roster.players.length === 1, "host alone again");
+f.send(clientLeave());
+await f.expectClosed();
 
 console.log("all good ✓");

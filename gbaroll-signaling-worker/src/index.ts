@@ -69,12 +69,18 @@ interface StoredPlayer {
   ready: boolean;
   romCrc32: number;
   romTitle: string;
+  /** The stable roster token (see PlayerInfo.seat in the schema):
+   * positions compact on departure, seats never move or get reused, so
+   * kicks addressed by seat can't land on the wrong player. */
+  seat: number;
 }
 
 /** A lobby. (Started rooms don't exist in storage — see above.) */
 interface StoredRoom {
   createdMs: number;
   players: StoredPlayer[];
+  /** The next unused seat token. */
+  nextSeat: number;
 }
 
 const ROOM_PREFIX = "room:";
@@ -137,6 +143,8 @@ export class Rooms extends DurableObject<Env> {
         return this.start(ws, m);
       case "signal":
         return this.signal(ws, m, msg.msg.value.peer, msg.msg.value.payload);
+      case "kickPlayer":
+        return this.kickPlayer(ws, m, msg.msg.value.seat);
       case "leave":
         await this.leave(ws, m);
         ws.close(1000, "left");
@@ -184,8 +192,10 @@ export class Rooms extends DurableObject<Env> {
           ready: false,
           romCrc32: msg.romCrc32,
           romTitle: msg.romTitle,
+          seat: 0,
         },
       ],
+      nextSeat: 1,
     };
     await this.putRoom(code, room);
     ws.serializeAttachment({ id: m.id, code } satisfies Attachment);
@@ -232,6 +242,7 @@ export class Rooms extends DurableObject<Env> {
       ready: false,
       romCrc32: msg.romCrc32,
       romTitle: msg.romTitle,
+      seat: room.nextSeat++,
     });
     await this.putRoom(code, room);
     ws.serializeAttachment({ id: m.id, code } satisfies Attachment);
@@ -298,6 +309,40 @@ export class Rooms extends DurableObject<Env> {
     this.sendTo(target, serverSignal(s.idx, payload));
   }
 
+  private async kickPlayer(ws: WebSocket, m: Attachment, seat: number): Promise<void> {
+    const loc = await this.locate(m);
+    if (loc === undefined) return;
+    if (loc.idx !== 0) {
+      this.sendError(ws, ErrorKind.NOT_HOST, "only the host can kick");
+      return;
+    }
+    // Kicks address seats, not positions, so one racing a departure
+    // can't land on whoever slid into the vacated slot — a gone seat
+    // just bounces. So does position 0: the host (the sender) can't
+    // kick themselves.
+    const target = loc.room.players.findIndex((p) => p.seat === seat);
+    if (target <= 0) {
+      this.sendError(ws, ErrorKind.MALFORMED, "no such player to kick");
+      return;
+    }
+    const [kicked] = loc.room.players.splice(target, 1);
+    for (const p of loc.room.players) p.ready = false;
+    await this.putRoom(loc.code, loc.room);
+    console.log(`kicked seat ${seat} from room ${loc.code}`);
+    for (const kws of this.ctx.getWebSockets(`id:${kicked.id}`)) {
+      // Detach from the lobby before closing so the close event's
+      // leave() is a clean no-op.
+      try {
+        kws.serializeAttachment({ id: kicked.id } satisfies Attachment);
+      } catch {
+        // Socket already unusable; it's out of the room regardless.
+      }
+      this.send(kws, serverError(ErrorKind.KICKED, ""));
+      kws.close(1000, "kicked");
+    }
+    this.broadcastRoster(loc.room);
+  }
+
   private async leave(ws: WebSocket, m: Attachment): Promise<void> {
     if (m.session !== undefined) {
       // Post-start there's no room state to update — just tell the
@@ -355,8 +400,17 @@ export class Rooms extends DurableObject<Env> {
     }
   }
 
-  private getRoom(code: string): Promise<StoredRoom | undefined> {
-    return this.ctx.storage.get<StoredRoom>(ROOM_PREFIX + code);
+  private async getRoom(code: string): Promise<StoredRoom | undefined> {
+    const room = await this.ctx.storage.get<StoredRoom>(ROOM_PREFIX + code);
+    if (room === undefined) return undefined;
+    // A lobby stored by a pre-seat deploy (hibernating sockets outlive
+    // deploys): backfill — its positions were stable for its whole life
+    // so far, so they make faithful seat tokens.
+    if (typeof room.nextSeat !== "number") {
+      room.players.forEach((p, i) => (p.seat = i));
+      room.nextSeat = room.players.length;
+    }
+    return room;
   }
 
   private putRoom(code: string, room: StoredRoom): Promise<void> {
@@ -402,10 +456,11 @@ export class Rooms extends DurableObject<Env> {
   private broadcastRoster(room: StoredRoom): void {
     const players = room.players.map((p, i) => ({
       nick: p.nick,
-      // The host never readies up; their seat always reads ready.
+      // The host never readies up; their slot always reads ready.
       ready: i === 0 || p.ready,
       romCrc32: p.romCrc32,
       romTitle: p.romTitle,
+      seat: p.seat,
     }));
     room.players.forEach((p, i) => {
       this.sendTo(p.id, serverRoster(players, i));

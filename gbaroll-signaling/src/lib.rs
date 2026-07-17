@@ -96,6 +96,14 @@ impl ClientMessage {
             msg: Some(client_message::Msg::Leave(Leave {})),
         }
     }
+
+    /// Host only: throw the player holding `seat` (the stable roster
+    /// token, not the compacting position) out of the lobby.
+    pub fn kick_player(seat: u32) -> Self {
+        Self {
+            msg: Some(client_message::Msg::KickPlayer(KickPlayer { seat })),
+        }
+    }
 }
 
 impl ServerMessage {
@@ -162,6 +170,7 @@ mod tests {
             ClientMessage::create_room("player", 0xdeadbeef, "TESTGAME"),
             ClientMessage::set_ready(true),
             ClientMessage::signal(2, vec![1, 2, 3]),
+            ClientMessage::kick_player(2),
         ];
         for m in msgs {
             assert_eq!(decode::<ClientMessage>(&encode(&m)).unwrap(), m);

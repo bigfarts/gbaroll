@@ -34,7 +34,7 @@ import { enumDesc, fileDesc, messageDesc, tsEnum } from "@bufbuild/protobuf/code
  * Describes the file signaling.proto.
  */
 export const file_signaling = /*@__PURE__*/
-  fileDesc("Cg9zaWduYWxpbmcucHJvdG8SEWdiYXJvbGwuc2lnbmFsaW5nIrMCCg1DbGllbnRNZXNzYWdlEjQKC2NyZWF0ZV9yb29tGAEgASgLMh0uZ2Jhcm9sbC5zaWduYWxpbmcuQ3JlYXRlUm9vbUgAEjAKCWpvaW5fcm9vbRgCIAEoCzIbLmdiYXJvbGwuc2lnbmFsaW5nLkpvaW5Sb29tSAASMAoJc2V0X3JlYWR5GAMgASgLMhsuZ2Jhcm9sbC5zaWduYWxpbmcuU2V0UmVhZHlIABIpCgVzdGFydBgEIAEoCzIYLmdiYXJvbGwuc2lnbmFsaW5nLlN0YXJ0SAASKwoGc2lnbmFsGAUgASgLMhkuZ2Jhcm9sbC5zaWduYWxpbmcuU2lnbmFsSAASKQoFbGVhdmUYBiABKAsyGC5nYmFyb2xsLnNpZ25hbGluZy5MZWF2ZUgAQgUKA21zZyKXAwoNU2VydmVyTWVzc2FnZRIpCgVoZWxsbxgBIAEoCzIYLmdiYXJvbGwuc2lnbmFsaW5nLkhlbGxvSAASNgoMcm9vbV9jcmVhdGVkGAIgASgLMh4uZ2Jhcm9sbC5zaWduYWxpbmcuUm9vbUNyZWF0ZWRIABI0Cgtyb29tX2pvaW5lZBgDIAEoCzIdLmdiYXJvbGwuc2lnbmFsaW5nLlJvb21Kb2luZWRIABIrCgZyb3N0ZXIYBCABKAsyGS5nYmFyb2xsLnNpZ25hbGluZy5Sb3N0ZXJIABIvCghzdGFydGluZxgFIAEoCzIbLmdiYXJvbGwuc2lnbmFsaW5nLlN0YXJ0aW5nSAASKwoGc2lnbmFsGAYgASgLMhkuZ2Jhcm9sbC5zaWduYWxpbmcuU2lnbmFsSAASMAoJcGVlcl9sZWZ0GAcgASgLMhsuZ2Jhcm9sbC5zaWduYWxpbmcuUGVlckxlZnRIABIpCgVlcnJvchgIIAEoCzIYLmdiYXJvbGwuc2lnbmFsaW5nLkVycm9ySABCBQoDbXNnIloKCkNyZWF0ZVJvb20SGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIMCgRuaWNrGAIgASgJEhEKCXJvbV9jcmMzMhgDIAEoDRIRCglyb21fdGl0bGUYBCABKAkiZgoISm9pblJvb20SGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIMCgRjb2RlGAIgASgJEgwKBG5pY2sYAyABKAkSEQoJcm9tX2NyYzMyGAQgASgNEhEKCXJvbV90aXRsZRgFIAEoCSIZCghTZXRSZWFkeRINCgVyZWFkeRgBIAEoCCIHCgVTdGFydCIHCgVMZWF2ZSInCgZTaWduYWwSDAoEcGVlchgBIAEoDRIPCgdwYXlsb2FkGAIgASgMIjoKBUhlbGxvEjEKC2ljZV9zZXJ2ZXJzGAEgAygLMhwuZ2Jhcm9sbC5zaWduYWxpbmcuSWNlU2VydmVyImUKCUljZVNlcnZlchIMCgR1cmxzGAEgAygJEhUKCHVzZXJuYW1lGAIgASgJSACIAQESFwoKY3JlZGVudGlhbBgDIAEoCUgBiAEBQgsKCV91c2VybmFtZUINCgtfY3JlZGVudGlhbCIbCgtSb29tQ3JlYXRlZBIMCgRjb2RlGAEgASgJIhoKClJvb21Kb2luZWQSDAoEY29kZRgBIAEoCSJKCgZSb3N0ZXISLgoHcGxheWVycxgBIAMoCzIdLmdiYXJvbGwuc2lnbmFsaW5nLlBsYXllckluZm8SEAoIeW91cl9pZHgYAiABKA0iTwoKUGxheWVySW5mbxIMCgRuaWNrGAEgASgJEg0KBXJlYWR5GAIgASgIEhEKCXJvbV9jcmMzMhgDIAEoDRIRCglyb21fdGl0bGUYBCABKAkiTQoIU3RhcnRpbmcSLwoHcGxheWVycxgBIAMoCzIeLmdiYXJvbGwuc2lnbmFsaW5nLlN0YXJ0UGxheWVyEhAKCHlvdXJfaWR4GAIgASgNIi4KC1N0YXJ0UGxheWVyEgwKBG5pY2sYASABKAkSEQoJcm9tX2NyYzMyGAIgASgNIh4KCFBlZXJMZWZ0EhIKCnBsYXllcl9pZHgYASABKA0iRAoFRXJyb3ISKgoEa2luZBgBIAEoDjIcLmdiYXJvbGwuc2lnbmFsaW5nLkVycm9yS2luZBIPCgdtZXNzYWdlGAIgASgJKp4CCglFcnJvcktpbmQSGgoWRVJST1JfS0lORF9VTlNQRUNJRklFRBAAEigKJEVSUk9SX0tJTkRfUFJPVE9DT0xfVkVSU0lPTl9NSVNNQVRDSBABEh0KGUVSUk9SX0tJTkRfUk9PTV9OT1RfRk9VTkQQAhIYChRFUlJPUl9LSU5EX1JPT01fRlVMTBADEiMKH0VSUk9SX0tJTkRfUk9PTV9BTFJFQURZX1NUQVJURUQQBBIXChNFUlJPUl9LSU5EX05PVF9IT1NUEAUSIQodRVJST1JfS0lORF9OT1RfRVZFUllPTkVfUkVBRFkQBhIYChRFUlJPUl9LSU5EX01BTEZPUk1FRBAHEhcKE0VSUk9SX0tJTkRfSU5URVJOQUwQCGIGcHJvdG8z");
+  fileDesc("Cg9zaWduYWxpbmcucHJvdG8SEWdiYXJvbGwuc2lnbmFsaW5nIukCCg1DbGllbnRNZXNzYWdlEjQKC2NyZWF0ZV9yb29tGAEgASgLMh0uZ2Jhcm9sbC5zaWduYWxpbmcuQ3JlYXRlUm9vbUgAEjAKCWpvaW5fcm9vbRgCIAEoCzIbLmdiYXJvbGwuc2lnbmFsaW5nLkpvaW5Sb29tSAASMAoJc2V0X3JlYWR5GAMgASgLMhsuZ2Jhcm9sbC5zaWduYWxpbmcuU2V0UmVhZHlIABIpCgVzdGFydBgEIAEoCzIYLmdiYXJvbGwuc2lnbmFsaW5nLlN0YXJ0SAASKwoGc2lnbmFsGAUgASgLMhkuZ2Jhcm9sbC5zaWduYWxpbmcuU2lnbmFsSAASKQoFbGVhdmUYBiABKAsyGC5nYmFyb2xsLnNpZ25hbGluZy5MZWF2ZUgAEjQKC2tpY2tfcGxheWVyGAcgASgLMh0uZ2Jhcm9sbC5zaWduYWxpbmcuS2lja1BsYXllckgAQgUKA21zZyKXAwoNU2VydmVyTWVzc2FnZRIpCgVoZWxsbxgBIAEoCzIYLmdiYXJvbGwuc2lnbmFsaW5nLkhlbGxvSAASNgoMcm9vbV9jcmVhdGVkGAIgASgLMh4uZ2Jhcm9sbC5zaWduYWxpbmcuUm9vbUNyZWF0ZWRIABI0Cgtyb29tX2pvaW5lZBgDIAEoCzIdLmdiYXJvbGwuc2lnbmFsaW5nLlJvb21Kb2luZWRIABIrCgZyb3N0ZXIYBCABKAsyGS5nYmFyb2xsLnNpZ25hbGluZy5Sb3N0ZXJIABIvCghzdGFydGluZxgFIAEoCzIbLmdiYXJvbGwuc2lnbmFsaW5nLlN0YXJ0aW5nSAASKwoGc2lnbmFsGAYgASgLMhkuZ2Jhcm9sbC5zaWduYWxpbmcuU2lnbmFsSAASMAoJcGVlcl9sZWZ0GAcgASgLMhsuZ2Jhcm9sbC5zaWduYWxpbmcuUGVlckxlZnRIABIpCgVlcnJvchgIIAEoCzIYLmdiYXJvbGwuc2lnbmFsaW5nLkVycm9ySABCBQoDbXNnIloKCkNyZWF0ZVJvb20SGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIMCgRuaWNrGAIgASgJEhEKCXJvbV9jcmMzMhgDIAEoDRIRCglyb21fdGl0bGUYBCABKAkiZgoISm9pblJvb20SGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIMCgRjb2RlGAIgASgJEgwKBG5pY2sYAyABKAkSEQoJcm9tX2NyYzMyGAQgASgNEhEKCXJvbV90aXRsZRgFIAEoCSIZCghTZXRSZWFkeRINCgVyZWFkeRgBIAEoCCIHCgVTdGFydCIHCgVMZWF2ZSIaCgpLaWNrUGxheWVyEgwKBHNlYXQYASABKA0iJwoGU2lnbmFsEgwKBHBlZXIYASABKA0SDwoHcGF5bG9hZBgCIAEoDCI6CgVIZWxsbxIxCgtpY2Vfc2VydmVycxgBIAMoCzIcLmdiYXJvbGwuc2lnbmFsaW5nLkljZVNlcnZlciJlCglJY2VTZXJ2ZXISDAoEdXJscxgBIAMoCRIVCgh1c2VybmFtZRgCIAEoCUgAiAEBEhcKCmNyZWRlbnRpYWwYAyABKAlIAYgBAUILCglfdXNlcm5hbWVCDQoLX2NyZWRlbnRpYWwiGwoLUm9vbUNyZWF0ZWQSDAoEY29kZRgBIAEoCSIaCgpSb29tSm9pbmVkEgwKBGNvZGUYASABKAkiSgoGUm9zdGVyEi4KB3BsYXllcnMYASADKAsyHS5nYmFyb2xsLnNpZ25hbGluZy5QbGF5ZXJJbmZvEhAKCHlvdXJfaWR4GAIgASgNIl0KClBsYXllckluZm8SDAoEbmljaxgBIAEoCRINCgVyZWFkeRgCIAEoCBIRCglyb21fY3JjMzIYAyABKA0SEQoJcm9tX3RpdGxlGAQgASgJEgwKBHNlYXQYBSABKA0iTQoIU3RhcnRpbmcSLwoHcGxheWVycxgBIAMoCzIeLmdiYXJvbGwuc2lnbmFsaW5nLlN0YXJ0UGxheWVyEhAKCHlvdXJfaWR4GAIgASgNIi4KC1N0YXJ0UGxheWVyEgwKBG5pY2sYASABKAkSEQoJcm9tX2NyYzMyGAIgASgNIh4KCFBlZXJMZWZ0EhIKCnBsYXllcl9pZHgYASABKA0iRAoFRXJyb3ISKgoEa2luZBgBIAEoDjIcLmdiYXJvbGwuc2lnbmFsaW5nLkVycm9yS2luZBIPCgdtZXNzYWdlGAIgASgJKrUCCglFcnJvcktpbmQSGgoWRVJST1JfS0lORF9VTlNQRUNJRklFRBAAEigKJEVSUk9SX0tJTkRfUFJPVE9DT0xfVkVSU0lPTl9NSVNNQVRDSBABEh0KGUVSUk9SX0tJTkRfUk9PTV9OT1RfRk9VTkQQAhIYChRFUlJPUl9LSU5EX1JPT01fRlVMTBADEiMKH0VSUk9SX0tJTkRfUk9PTV9BTFJFQURZX1NUQVJURUQQBBIXChNFUlJPUl9LSU5EX05PVF9IT1NUEAUSIQodRVJST1JfS0lORF9OT1RfRVZFUllPTkVfUkVBRFkQBhIYChRFUlJPUl9LSU5EX01BTEZPUk1FRBAHEhcKE0VSUk9SX0tJTkRfSU5URVJOQUwQCBIVChFFUlJPUl9LSU5EX0tJQ0tFRBAJYgZwcm90bzM");
 
 /**
  * Describes the message gbaroll.signaling.ClientMessage.
@@ -86,81 +86,88 @@ export const LeaveSchema = /*@__PURE__*/
   messageDesc(file_signaling, 6);
 
 /**
+ * Describes the message gbaroll.signaling.KickPlayer.
+ * Use `create(KickPlayerSchema)` to create a new message.
+ */
+export const KickPlayerSchema = /*@__PURE__*/
+  messageDesc(file_signaling, 7);
+
+/**
  * Describes the message gbaroll.signaling.Signal.
  * Use `create(SignalSchema)` to create a new message.
  */
 export const SignalSchema = /*@__PURE__*/
-  messageDesc(file_signaling, 7);
+  messageDesc(file_signaling, 8);
 
 /**
  * Describes the message gbaroll.signaling.Hello.
  * Use `create(HelloSchema)` to create a new message.
  */
 export const HelloSchema = /*@__PURE__*/
-  messageDesc(file_signaling, 8);
+  messageDesc(file_signaling, 9);
 
 /**
  * Describes the message gbaroll.signaling.IceServer.
  * Use `create(IceServerSchema)` to create a new message.
  */
 export const IceServerSchema = /*@__PURE__*/
-  messageDesc(file_signaling, 9);
+  messageDesc(file_signaling, 10);
 
 /**
  * Describes the message gbaroll.signaling.RoomCreated.
  * Use `create(RoomCreatedSchema)` to create a new message.
  */
 export const RoomCreatedSchema = /*@__PURE__*/
-  messageDesc(file_signaling, 10);
+  messageDesc(file_signaling, 11);
 
 /**
  * Describes the message gbaroll.signaling.RoomJoined.
  * Use `create(RoomJoinedSchema)` to create a new message.
  */
 export const RoomJoinedSchema = /*@__PURE__*/
-  messageDesc(file_signaling, 11);
+  messageDesc(file_signaling, 12);
 
 /**
  * Describes the message gbaroll.signaling.Roster.
  * Use `create(RosterSchema)` to create a new message.
  */
 export const RosterSchema = /*@__PURE__*/
-  messageDesc(file_signaling, 12);
+  messageDesc(file_signaling, 13);
 
 /**
  * Describes the message gbaroll.signaling.PlayerInfo.
  * Use `create(PlayerInfoSchema)` to create a new message.
  */
 export const PlayerInfoSchema = /*@__PURE__*/
-  messageDesc(file_signaling, 13);
+  messageDesc(file_signaling, 14);
 
 /**
  * Describes the message gbaroll.signaling.Starting.
  * Use `create(StartingSchema)` to create a new message.
  */
 export const StartingSchema = /*@__PURE__*/
-  messageDesc(file_signaling, 14);
+  messageDesc(file_signaling, 15);
 
 /**
  * Describes the message gbaroll.signaling.StartPlayer.
  * Use `create(StartPlayerSchema)` to create a new message.
  */
 export const StartPlayerSchema = /*@__PURE__*/
-  messageDesc(file_signaling, 15);
+  messageDesc(file_signaling, 16);
 
 /**
  * Describes the message gbaroll.signaling.PeerLeft.
  * Use `create(PeerLeftSchema)` to create a new message.
  */
 export const PeerLeftSchema = /*@__PURE__*/
-  messageDesc(file_signaling, 16);
+  messageDesc(file_signaling, 17);
 
 /**
  * Describes the message gbaroll.signaling.Error.
  * Use `create(ErrorSchema)` to create a new message.
  */
 export const ErrorSchema = /*@__PURE__*/
-  messageDesc(file_signaling, 17);
+  messageDesc(file_signaling, 18);
 
 /**
  * Describes the enum gbaroll.signaling.ErrorKind.

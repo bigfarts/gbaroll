@@ -19,6 +19,10 @@ pub enum LobbyCommand {
     SetReady { ready: bool },
     /// Host only.
     Start,
+    /// Host only: throw a player out of the lobby, addressed by the
+    /// roster's stable seat token (positions compact; seats don't, so
+    /// a kick racing a departure can't hit the wrong player).
+    Kick { seat: u32 },
     /// The local machine's encoded boot payload, captured by the UI in
     /// response to [`LobbyEvent::Starting`].
     Boot(Vec<u8>),
@@ -137,6 +141,9 @@ async fn run(
                     Some(LobbyCommand::Start) => {
                         send(&socket, &ClientMessage::start())?;
                     }
+                    Some(LobbyCommand::Kick { seat }) => {
+                        send(&socket, &ClientMessage::kick_player(seat))?;
+                    }
                     // A boot capture belongs to the start phase; stray
                     // ones in the lobby phase mean nothing.
                     Some(LobbyCommand::Boot(_)) => {}
@@ -181,6 +188,7 @@ async fn run(
                                 | ErrorKind::RoomNotFound
                                 | ErrorKind::RoomFull
                                 | ErrorKind::RoomAlreadyStarted
+                                | ErrorKind::Kicked
                         );
                         if fatal {
                             anyhow::bail!("{}", error_text(kind));
@@ -252,6 +260,7 @@ fn error_text(kind: ErrorKind) -> &'static str {
         ErrorKind::RoomAlreadyStarted => "That room already started.",
         ErrorKind::NotHost => "Only the host can start.",
         ErrorKind::NotEveryoneReady => "The room can't start yet.",
+        ErrorKind::Kicked => "The host removed you from the room.",
         ErrorKind::Malformed | ErrorKind::Internal | ErrorKind::Unspecified => {
             "The server rejected that."
         }
