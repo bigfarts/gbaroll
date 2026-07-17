@@ -151,13 +151,36 @@ pub async fn write(
         .await?
         .dyn_into()
         .map_err(|_| err("expected a writable stream"))?;
+    // Hand write() an owned, exact-sized buffer, never a `&[u8]` view:
+    // web-sys passes a slice as a Uint8Array view into all of wasm
+    // linear memory, and iOS WebKit has written the view's whole
+    // backing buffer — tens of MiB of heap — instead of the view,
+    // which is how imports came out enormous. (A view is also unsound
+    // against mid-write heap growth, which detaches it.)
+    let data = Uint8Array::from(bytes);
     JsFuture::from(
         stream
-            .write_with_u8_array(bytes)
+            .write_with_js_u8_array(&data)
             .map_err(StorageError::from)?,
     )
     .await?;
     JsFuture::from(stream.close()).await?;
+    // Trust, but verify: a browser that wrote some other size must
+    // fail the import loudly, not seed the library with a corrupt
+    // file. (The old content is already gone either way — the write
+    // truncates — so deleting the bad copy loses nothing.)
+    let file: web_sys::File = JsFuture::from(handle.get_file())
+        .await?
+        .dyn_into()
+        .map_err(|_| err("expected a File"))?;
+    let written = file.size() as u64;
+    if written != bytes.len() as u64 {
+        let _ = JsFuture::from(dir.remove_entry(name)).await;
+        return Err(err(&format!(
+            "browser wrote {written} bytes instead of {}",
+            bytes.len()
+        )));
+    }
     Ok(())
 }
 

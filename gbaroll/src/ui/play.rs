@@ -40,10 +40,22 @@ pub(crate) fn flash(mut slot: Signal<Option<Flash>>, text: impl Into<String>, ok
 pub(crate) static ROM_IMPORT_FLASH: GlobalSignal<Option<Flash>> = Signal::global(|| None);
 pub(crate) static SAVE_IMPORT_FLASH: GlobalSignal<Option<Flash>> = Signal::global(|| None);
 
-/// Flash a drop's outcome onto whichever side(s) it landed: ROMs on
+/// Flash an import's outcome onto whichever side(s) it landed: ROMs on
 /// the library, saves on the saves pane, skips reported on the library
-/// side unless only saves imported.
-pub(crate) fn import_flashes(roms: u32, saves: u32, skipped: u32) {
+/// side unless only saves imported. When nothing landed at all the
+/// import *failed*, and the failure reports on `fail_slot` — the pane
+/// whose picker ran, or the library for area-wide drops.
+pub(crate) fn import_flashes(roms: u32, saves: u32, skipped: u32, fail_slot: Signal<Option<Flash>>) {
+    if roms == 0 && saves == 0 {
+        let msg = if skipped > 0 {
+            format!("Import failed, skipped {skipped}")
+        } else {
+            // The picker handed over nothing (iOS does this).
+            "Import failed: no files received".to_string()
+        };
+        flash(fail_slot, msg, false, 5000);
+        return;
+    }
     let skips_on_saves = roms == 0 && saves > 0;
     if roms > 0 || (skipped > 0 && !skips_on_saves) {
         let msg = if skipped == 0 {
@@ -215,20 +227,22 @@ pub fn PlayScreen() -> Element {
                         }
                         input {
                             r#type: "file",
-                            accept: ".gba,.agb,.srl",
+                            // iOS greys out every file in its picker when
+                            // `accept` names extensions the system has no
+                            // type for (.gba and friends), so there the
+                            // picker goes unfiltered.
+                            accept: if !crate::web::is_ios() { ".gba,.agb,.srl" },
                             multiple: true,
                             onchange: move |evt| {
                                 let storage = storage_res.read().clone().flatten();
+                                let files = evt.files();
+                                // Re-picking the same file must fire again.
+                                crate::web::reset_file_input(&evt);
                                 async move {
                                     let Some(storage) = storage else { return };
-                                    let (r, _, skipped) =
-                                        crate::web::import_files(&storage, evt.files()).await;
-                                    let msg = if skipped == 0 {
-                                        format!("Imported {r}!")
-                                    } else {
-                                        format!("Imported {r}, skipped {skipped}")
-                                    };
-                                    flash(rom_import_flash, msg, skipped == 0, 3000);
+                                    let (r, s, skipped) =
+                                        crate::web::import_files(&storage, files).await;
+                                    import_flashes(r, s, skipped, rom_import_flash);
                                     *library_rev.write() += 1;
                                 }
                             },
@@ -370,20 +384,19 @@ pub fn PlayScreen() -> Element {
                     }
                     input {
                         r#type: "file",
-                        accept: ".sav,.sa1,.srm",
+                        // Unfiltered on iOS — see the ROM picker.
+                        accept: if !crate::web::is_ios() { ".sav,.sa1,.srm" },
                         multiple: true,
                         onchange: move |evt| {
                             let storage = storage_res.read().clone().flatten();
+                            let files = evt.files();
+                            // Re-picking the same file must fire again.
+                            crate::web::reset_file_input(&evt);
                             async move {
                                 let Some(storage) = storage else { return };
-                                let (_, s, skipped) =
-                                    crate::web::import_files(&storage, evt.files()).await;
-                                let msg = if skipped == 0 {
-                                    format!("Imported {s}!")
-                                } else {
-                                    format!("Imported {s}, skipped {skipped}")
-                                };
-                                flash(save_import_flash, msg, skipped == 0, 3000);
+                                let (r, s, skipped) =
+                                    crate::web::import_files(&storage, files).await;
+                                import_flashes(r, s, skipped, save_import_flash);
                                 *library_rev.write() += 1;
                             }
                         },

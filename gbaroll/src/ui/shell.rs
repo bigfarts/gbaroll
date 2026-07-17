@@ -202,7 +202,7 @@ fn Shell() -> Element {
                     async move {
                         let Some(storage) = storage else { return };
                         let (r, s, skipped) = crate::web::import_files(&storage, files).await;
-                        play::import_flashes(r, s, skipped);
+                        play::import_flashes(r, s, skipped, play::ROM_IMPORT_FLASH.signal());
                         *library_rev.write() += 1;
                     }
                 },

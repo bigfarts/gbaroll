@@ -1139,13 +1139,14 @@ main.settings-main .card:last-child {
     }
 }
 
-/* Rendered inert everywhere; a coarse-pointer landscape screen (a
-   phone held sideways) turns them on over the stage. */
+/* Rendered inert everywhere; a coarse-pointer screen (a phone or
+   tablet) turns them on over the stage — the session is always
+   landscape there (held upright it rotates, see below). */
 .touch-controls {
     display: none;
 }
 
-@media (pointer: coarse) and (orientation: landscape) {
+@media (pointer: coarse) {
     .touch-controls {
         display: block;
         position: absolute;
@@ -1327,6 +1328,33 @@ main.settings-main .card:last-child {
 
     .tele-card .btn.ghost.icon-btn {
         padding: 8px;
+    }
+}
+
+/* A phone held upright: the session view never squeezes into portrait —
+   it renders landscape, rotated 90° onto the tall screen (turn the
+   phone and the picture is upright). The touch controls' pointer math
+   survives the rotation because offsetX/offsetY map through the
+   inverse transform. */
+@media (pointer: coarse) and (orientation: portrait) {
+    .session {
+        /* The base rule's inset:0 still pins top/left; the explicit
+           size takes over from right/bottom. */
+        width: 100dvh;
+        height: 100dvw;
+        transform-origin: top left;
+        transform: rotate(90deg) translateY(-100dvw);
+    }
+
+    /* The rotated session's axes are swapped relative to the viewport,
+       so the viewport-unit sizing above swaps too. */
+    .stage canvas {
+        width: max(240px, round(down, min(100dvh, 100dvw * 1.5), 240px));
+    }
+
+    .tele-card {
+        width: min(320px, calc(100dvh - 20px));
+        max-height: calc(100dvw - 42px);
     }
 }
 

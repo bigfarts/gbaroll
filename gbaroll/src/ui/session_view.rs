@@ -104,8 +104,8 @@ pub fn SessionView() -> Element {
                 // cable state; the menu and end overlays sit above it.
                 if end.is_none() && !menu_open && running {
                     telemetry::CableOverlay {}
-                    // Coarse-pointer landscape screens get on-screen
-                    // controls (CSS decides; it renders inert elsewhere).
+                    // Coarse-pointer screens get on-screen controls
+                    // (CSS decides; it renders inert elsewhere).
                     touch::TouchControls {}
                 }
                 // Pause only happens transiently (the lobby freezes the

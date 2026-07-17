@@ -1,5 +1,6 @@
 //! On-screen touch controls, shown over the stage on coarse-pointer
-//! landscape screens (see the `.touch-controls` CSS): a slide-aware
+//! screens (see the `.touch-controls` CSS; the session view is always
+//! landscape there, rotated when the device is upright): a slide-aware
 //! d-pad on the left, A/B on the right, L/R shoulders in the top
 //! corners, Start/Select at the bottom, and a menu button (touch has
 //! no Escape). Held buttons write mgba joyflag bits straight into
