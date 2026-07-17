@@ -861,7 +861,7 @@ fn install_keyboard(runtime: Weak<RefCell<Runtime>>) {
     let document = web_sys::window().unwrap().document().unwrap();
     for (event, pressed) in [("keydown", true), ("keyup", false)] {
         let runtime = runtime.clone();
-        let document = document.clone();
+        let doc = document.clone();
         let closure: Closure<dyn FnMut(web_sys::KeyboardEvent)> =
             Closure::new(move |e: web_sys::KeyboardEvent| {
                 let code = e.code();
@@ -906,7 +906,7 @@ fn install_keyboard(runtime: Weak<RefCell<Runtime>>) {
                 // button), bound keys must not double as game input.
                 // Releases still land so a key held when focus moved
                 // can't stay down forever.
-                let item_focused = document
+                let item_focused = doc
                     .active_element()
                     .is_some_and(|el| !matches!(el.tag_name().as_str(), "BODY" | "HTML"));
                 if item_focused {
