@@ -365,7 +365,7 @@ pub fn PlayScreen() -> Element {
                                 } else {
                                     button {
                                         class: "btn ghost icon-btn",
-                                        title: "Delete {rom.display_name()}",
+                                        title: "Delete",
                                         onclick: {
                                             let file_name = rom.file_name.clone();
                                             move |evt: MouseEvent| {
@@ -572,7 +572,8 @@ pub fn PlayScreen() -> Element {
                                     icons::Pencil {}
                                 }
                                 button {
-                                    class: "btn ghost",
+                                    class: "btn ghost icon-btn",
+                                    title: "Export",
                                     onclick: {
                                         let save = save.clone();
                                         move |evt: MouseEvent| {
@@ -594,7 +595,6 @@ pub fn PlayScreen() -> Element {
                                         }
                                     },
                                     icons::Download {}
-                                    "Export"
                                 }
                                 button {
                                     class: "btn ghost icon-btn",
