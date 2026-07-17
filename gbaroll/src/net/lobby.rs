@@ -13,6 +13,10 @@ use crate::net::ws::SignalSocket;
 
 #[derive(Debug)]
 pub enum LobbyCommand {
+    /// The legacy ready bit, repurposed as the automatic "I have every
+    /// ROM in this roster" report — the host blocks Start until every
+    /// peer reports complete. Never surfaced as a control.
+    SetReady { ready: bool },
     /// Host only.
     Start,
     /// The local machine's encoded boot payload, captured by the UI in
@@ -127,6 +131,9 @@ async fn run(
         futures::select! {
             cmd = cmd_rx.next() => {
                 match cmd {
+                    Some(LobbyCommand::SetReady { ready }) => {
+                        send(&socket, &ClientMessage::set_ready(ready))?;
+                    }
                     Some(LobbyCommand::Start) => {
                         send(&socket, &ClientMessage::start())?;
                     }
@@ -167,17 +174,19 @@ async fn run(
                         });
                     }
                     server_message::Msg::Error(e) => {
+                        let kind = e.kind();
                         let fatal = matches!(
-                            e.kind(),
+                            kind,
                             ErrorKind::ProtocolVersionMismatch
                                 | ErrorKind::RoomNotFound
                                 | ErrorKind::RoomFull
                                 | ErrorKind::RoomAlreadyStarted
                         );
                         if fatal {
-                            anyhow::bail!("{}", e.message);
+                            anyhow::bail!("{}", error_text(kind));
                         }
-                        let _ = events.unbounded_send(LobbyEvent::Error(e.message));
+                        let _ =
+                            events.unbounded_send(LobbyEvent::Error(error_text(kind).to_string()));
                     }
                     server_message::Msg::Starting(s) => {
                         break (s.players, s.your_idx as usize);
@@ -231,4 +240,20 @@ async fn run(
 
 fn send(socket: &SignalSocket, msg: &ClientMessage) -> anyhow::Result<()> {
     socket.send(&gbaroll_signaling::encode(msg))
+}
+
+/// The user-facing text for a server error. The wire carries only the
+/// kind; the words are the client's.
+fn error_text(kind: ErrorKind) -> &'static str {
+    match kind {
+        ErrorKind::ProtocolVersionMismatch => "This build is out of date — reload the app.",
+        ErrorKind::RoomNotFound => "No room with that code.",
+        ErrorKind::RoomFull => "That room is full.",
+        ErrorKind::RoomAlreadyStarted => "That room already started.",
+        ErrorKind::NotHost => "Only the host can start.",
+        ErrorKind::NotEveryoneReady => "The room can't start yet.",
+        ErrorKind::Malformed | ErrorKind::Internal | ErrorKind::Unspecified => {
+            "The server rejected that."
+        }
+    }
 }

@@ -20,10 +20,33 @@ pub extern "C" fn gbaroll_now_unix_ms() -> f64 {
 }
 
 pub fn main() {
-    console_error_panic_hook::set_once();
+    install_panic_hook();
     let _ = console_log::init_with_level(log::Level::Info);
     mgba::log::install_default_logger();
     dioxus::launch(crate::ui::App);
+}
+
+/// The console panic hook, plus a durable copy: a panic on wasm never
+/// unwinds, so a mid-pump panic leaves the runtime's RefCell borrowed
+/// forever and the session freezes with a healthy event loop — easy to
+/// mistake for a hang and easy to lose the console for. Persist the
+/// last panic (message + location + when) into
+/// `localStorage["gbaroll-panic"]` so it survives the reload and can be
+/// read post-mortem.
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        console_error_panic_hook::hook(info);
+        let record = format!(
+            "{{\"at\":\"{}\",\"panic\":{}}}",
+            String::from(js_sys::Date::new_0().to_iso_string()),
+            js_sys::JSON::stringify(&info.to_string().into())
+                .map(String::from)
+                .unwrap_or_else(|_| "\"?\"".into())
+        );
+        if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+            let _ = storage.set_item("gbaroll-panic", &record);
+        }
+    }));
 }
 
 /// Ensure the audio sink exists (must run within a user gesture), then

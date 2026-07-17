@@ -1,10 +1,10 @@
-//! The unified cable overlay — a top-right status chip that expands to
-//! room setup / the lobby while offline, then to link telemetry and
-//! disconnect controls while connected. The clock metrics (TPS, skew,
-//! lead, rollback depth) are one shared reading for the whole link —
-//! the engine's skew/queue are already worst-case over every remote —
-//! while ping is per-peer, one card each, so the panel grows with the
-//! number of clients instead of assuming a single opponent.
+//! The connected cable's telemetry card (dropped from the chip row —
+//! see `overlay`), plus the chip's link-quality glyph. The clock
+//! metrics (TPS, skew, lead, rollback depth) are one shared reading
+//! for the whole link — the engine's skew/queue are already worst-case
+//! over every remote — while ping is per-peer, one card each, so the
+//! panel grows with the number of clients instead of assuming a single
+//! opponent.
 //!
 //! Sparklines draw on small 2D canvases from the runtime's sample ring,
 //! redrawn per presented frame while the panel is open.
@@ -12,9 +12,9 @@
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
-use super::{cable, icons, use_ctx};
-use crate::runtime::{FRAME_REV, MENU_OPEN, PANEL_OPEN, SESSION_EPOCH};
-use crate::session::{MetricSample, SessionKind, HISTORY_LEN};
+use super::{icons, use_ctx};
+use crate::runtime::{FRAME_REV, PANEL_OPEN, SESSION_EPOCH};
+use crate::session::{MetricSample, HISTORY_LEN};
 
 // Per-metric vertical spans (the full height of a sparkline).
 const TPS_SPAN: f32 = 8.0; // ticks/sec below target
@@ -336,8 +336,8 @@ fn draw_sparkline(canvas_id: &str, points: &Points, fill_under: bool, zero: Opti
     }
 }
 
-/// The signal-strength glyph for the collapsed chip, keyed off skew.
-fn signal_icon(skew: i32) -> Element {
+/// The signal-strength glyph for the cable chip, keyed off skew.
+pub(super) fn signal_icon(skew: i32) -> Element {
     match skew.unsigned_abs() {
         0..=3 => rsx! { icons::SignalHigh {} },
         4..=7 => rsx! { icons::SignalMedium {} },
@@ -345,40 +345,39 @@ fn signal_icon(skew: i32) -> Element {
     }
 }
 
-/// The top-right cable overlay: collapsed status chip or expanded panel.
+/// The chip glyph's colour for a skew reading (same tone scale the
+/// skew metric card uses).
+pub(super) fn skew_tone_css(skew: i32) -> &'static str {
+    tone_for_abs(skew, 3, 7).css()
+}
+
+/// The dropped telemetry card for a connected cable: the shared clock
+/// metrics, per-peer pings, the present-delay control, and disconnect.
 #[component]
-pub fn CableOverlay() -> Element {
+pub fn TelemetryCard() -> Element {
     let ctx = use_ctx();
     let _ = SESSION_EPOCH.read();
     let _ = FRAME_REV.read();
-    let expanded = *PANEL_OPEN.read();
 
-    let (is_netplay, skew, peers) = {
+    let peers: Vec<(usize, String)> = {
         let rt = ctx.runtime.borrow();
-        match rt.descriptor() {
-            Some(d) if d.kind == SessionKind::Netplay => {
-                let stats = rt.shared().map(|s| s.stats.lock().unwrap().clone());
-                (
-                    true,
-                    stats.as_ref().map(|s| s.skew).unwrap_or(0),
-                    stats
-                        .map(|s| {
-                            s.peers
-                                .iter()
-                                .map(|p| (p.player, p.nick.clone()))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default(),
-                )
-            }
-            _ => (false, 0, Vec::new()),
-        }
+        rt.shared()
+            .map(|s| {
+                s.stats
+                    .lock()
+                    .unwrap()
+                    .peers
+                    .iter()
+                    .map(|p| (p.player, p.nick.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
     };
 
     // Redraw the sparklines (and the shared ping graph) after every
-    // rendered frame while expanded.
+    // rendered frame.
     type Snapshot = (Vec<(String, Points, bool, Option<f32>)>, Vec<PingSeries>);
-    let snapshot: Snapshot = if is_netplay && expanded {
+    let snapshot: Snapshot = {
         let rt = ctx.runtime.borrow();
         (
             metrics_from(rt.metric_history())
@@ -387,8 +386,6 @@ pub fn CableOverlay() -> Element {
                 .collect(),
             ping_series(rt.metric_history(), &peers),
         )
-    } else {
-        Default::default()
     };
     use_effect(use_reactive!(|snapshot| {
         let (metrics, pings) = &snapshot;
@@ -401,80 +398,32 @@ pub fn CableOverlay() -> Element {
     }));
 
     rsx! {
-        div { class: "cable-overlay",
-            // The chip pair holds the top center on every screen; the
-            // expanded card drops from the same spot. (Touch has no
-            // Escape, so the menu chip is the menu's only way in there.)
-            div { class: "chip-row",
+        div { class: "tele-card",
+            div { class: "tele-head",
+                h3 { "Link cable" }
                 button {
-                    class: "btn status-chip",
-                    onclick: move |_| *MENU_OPEN.write() = true,
-                    icons::Menu {}
-                    span { class: "chip-label", "Menu" }
+                    class: "btn ghost icon-btn",
+                    onclick: move |_| *PANEL_OPEN.write() = false,
+                    icons::ChevronUp {}
                 }
+            }
+            TelemetryCards { ctx_key: FRAME_REV() }
+            // A control, not a metric — visually its own group.
+            div { class: "delay-section",
+                DelayControl {}
+            }
+            div { class: "menu-actions",
                 button {
-                    class: "btn status-chip",
-                    onclick: move |_| {
-                        let open = *PANEL_OPEN.peek();
-                        *PANEL_OPEN.write() = !open;
+                    class: "btn danger",
+                    onclick: {
+                        let ctx = ctx.clone();
+                        move |_| ctx.runtime.borrow().unplug()
                     },
-                    if is_netplay {
-                        // Bars for link quality, colour for the same
-                        // reading — no number.
-                        span {
-                            class: "signal",
-                            style: "color: {tone_for_abs(skew, 3, 7).css()}",
-                            {signal_icon(skew)}
-                        }
-                    } else {
-                        icons::Cable {}
-                        span { class: "chip-label", "Link cable" }
-                    }
+                    icons::Unplug {}
+                    "Disconnect cable"
                 }
             }
-            if expanded && is_netplay {
-                // Expanded, connected: the telemetry card.
-                div { class: "tele-card",
-                    div { class: "tele-head",
-                        h3 { "Link cable" }
-                        button {
-                            class: "btn ghost icon-btn",
-                            onclick: move |_| *PANEL_OPEN.write() = false,
-                            icons::ChevronUp {}
-                        }
-                    }
-                    TelemetryCards { ctx_key: FRAME_REV() }
-                    // A control, not a metric — visually its own group.
-                    div { class: "delay-section",
-                        DelayControl {}
-                    }
-                    div { class: "menu-actions",
-                        button {
-                            class: "btn danger",
-                            onclick: {
-                                let ctx = ctx.clone();
-                                move |_| ctx.runtime.borrow().unplug()
-                            },
-                            icons::Unplug {}
-                            "Disconnect cable"
-                        }
-                    }
-                    p { class: "hint", "Your local game keeps running after disconnecting." }
-                }
-            } else if expanded {
-                // Expanded, offline/lobby: room setup and the roster.
-                div { class: "tele-card",
-                    div { class: "tele-head",
-                        h3 { "Link cable" }
-                        button {
-                            class: "btn ghost icon-btn",
-                            onclick: move |_| *PANEL_OPEN.write() = false,
-                            icons::ChevronUp {}
-                        }
-                    }
-                    cable::CableBody {}
-                }
-            }
+            p { class: "hint", "Your local game keeps running after disconnecting." }
         }
     }
 }

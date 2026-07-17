@@ -5,6 +5,7 @@
 
 mod cable;
 mod icons;
+mod overlay;
 mod play;
 mod session_view;
 mod settings;

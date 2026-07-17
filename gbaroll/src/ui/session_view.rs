@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
-use super::{cable, telemetry, touch, use_ctx, Ctx};
+use super::{cable, icons, overlay, touch, use_ctx, Ctx};
 use crate::platform::input::{self, MappedKey};
 use crate::runtime::{FRAME_REV, MENU_OPEN, SESSION_EPOCH};
 use crate::session::{SessionEnd, SessionKind};
@@ -17,7 +17,7 @@ use crate::session::{SessionEnd, SessionKind};
 pub fn SessionView() -> Element {
     let Ctx {
         runtime,
-        mut config,
+        config,
         library,
         mut library_rev,
         mut selected_save,
@@ -102,7 +102,7 @@ pub fn SessionView() -> Element {
     let _ = SESSION_EPOCH.read();
     let menu_open = *MENU_OPEN.read();
 
-    let (title, running, paused, end, caption) = {
+    let (title, running, paused, end) = {
         let lib = library.read();
         let rt = runtime.borrow();
         let title = rt
@@ -115,29 +115,14 @@ pub fn SessionView() -> Element {
             })
             .map(|rom| rom.display_name().to_string())
             .unwrap_or_else(|| "Session".to_string());
-        let caption = match rt.descriptor().map(|d| d.kind) {
-            Some(SessionKind::Netplay) => "Netplay",
-            _ => "Playing solo",
-        };
         let end = rt.last_end();
         match rt.shared() {
             Some(shared) => {
                 let paused = shared.paused.load(Ordering::Relaxed);
-                (title, true, paused, end, caption)
+                (title, true, paused, end)
             }
-            None => (title, false, false, end, caption),
+            None => (title, false, false, end),
         }
-    };
-
-    let volume_pct = (config.read().volume * 100.0).round() as u32;
-    let hints = {
-        let cfg = config.read();
-        let mut hints = vec!["Esc — menu".to_string()];
-        if let Some(physical) = cfg.mapping.slot(MappedKey::SpeedUp).first() {
-            let (_, label) = input::describe(physical);
-            hints.push(format!("hold {label} — fast-forward"));
-        }
-        hints.join("  ·  ")
     };
 
     rsx! {
@@ -154,13 +139,17 @@ pub fn SessionView() -> Element {
                     height: if config.read().integer_scaling { "160" } else { "960" },
                     class: if !config.read().integer_scaling { "fit" },
                 }
-                // The cable/telemetry overlay keeps its corner in every
-                // cable state; the menu and end overlays sit above it.
-                if end.is_none() && !menu_open && running {
-                    telemetry::CableOverlay {}
-                    // Coarse-pointer screens get on-screen controls
-                    // (CSS decides; it renders inert elsewhere).
-                    touch::TouchControls {}
+                // The chip row (and whichever card is dropped from it —
+                // menu or cable) keeps its spot in every state; only the
+                // end overlay is modal.
+                if end.is_none() && running {
+                    overlay::SessionOverlay {}
+                    // Coarse-pointer screens get on-screen controls (CSS
+                    // decides; it renders inert elsewhere). They rest
+                    // while the menu is down.
+                    if !menu_open {
+                        touch::TouchControls {}
+                    }
                 }
                 // Pause only happens transiently (the lobby freezes the
                 // machine for its capture); the badge says why the game
@@ -183,51 +172,102 @@ pub fn SessionView() -> Element {
                         }
                     }
                 }
-            } else if menu_open {
-                div { class: "overlay",
-                    div { class: "overlay-panel",
-                        div { class: "overlay-head",
-                            h2 { "{title}" }
-                            p { class: "sub", "{caption}" }
-                        }
-                        div { class: "menu-volume",
-                            label { "Volume · {volume_pct}%" }
-                            input {
-                                r#type: "range",
-                                min: "0",
-                                max: "100",
-                                value: "{volume_pct}",
-                                oninput: move |evt: FormEvent| {
-                                    if let Ok(v) = evt.value().parse::<f32>() {
-                                        config.with_mut(|c| c.volume = (v / 100.0).clamp(0.0, 1.0));
-                                    }
-                                },
-                            }
-                        }
-                        div { class: "menu-actions",
-                            button {
-                                class: "btn primary",
-                                onclick: move |_| *MENU_OPEN.write() = false,
-                                "Back to game"
-                            }
-                            button {
-                                class: "btn danger",
-                                onclick: {
-                                    let runtime = runtime.clone();
-                                    move |_| {
-                                        // A lobby can't outlive the session
-                                        // it would plug into.
-                                        cable::leave();
-                                        runtime.borrow_mut().close_session()
-                                    }
-                                },
-                                "Quit game"
-                            }
-                        }
-                        p { class: "hint", "{hints}" }
-                    }
+            }
+        }
+    }
+}
+
+/// The session menu as a card dropped from the chip row, mirroring the
+/// cable panel's layout. Rendered by `telemetry::CableOverlay` so both
+/// cards share one anchor.
+#[component]
+pub fn SessionMenuCard() -> Element {
+    let Ctx {
+        runtime,
+        mut config,
+        library,
+        ..
+    } = use_ctx();
+
+    let (title, caption) = {
+        let lib = library.read();
+        let rt = runtime.borrow();
+        let title = rt
+            .descriptor()
+            .and_then(|d| d.rom_crc32)
+            .and_then(|crc| {
+                lib.as_ref()
+                    .and_then(|v| v.as_ref())
+                    .and_then(|(lib, _)| lib.by_crc32(crc))
+            })
+            .map(|rom| rom.display_name().to_string())
+            .unwrap_or_else(|| "Session".to_string());
+        let caption = match rt.descriptor().map(|d| d.kind) {
+            Some(SessionKind::Netplay) => "Netplay",
+            _ => "Playing solo",
+        };
+        (title, caption)
+    };
+
+    let volume_pct = (config.read().volume * 100.0).round() as u32;
+    let hints = {
+        let cfg = config.read();
+        let mut hints = vec!["Esc — menu".to_string()];
+        if let Some(physical) = cfg.mapping.slot(MappedKey::SpeedUp).first() {
+            let (_, label) = input::describe(physical);
+            hints.push(format!("hold {label} — fast-forward"));
+        }
+        hints.join("  ·  ")
+    };
+
+    rsx! {
+        div { class: "tele-card",
+            div { class: "tele-head",
+                div {
+                    h3 { "{title}" }
+                    p { class: "sub", "{caption}" }
+                }
+                button {
+                    class: "btn ghost icon-btn",
+                    onclick: move |_| *MENU_OPEN.write() = false,
+                    icons::ChevronUp {}
                 }
             }
+            div { class: "menu-volume",
+                label { "Volume · {volume_pct}%" }
+                input {
+                    r#type: "range",
+                    min: "0",
+                    max: "100",
+                    value: "{volume_pct}",
+                    oninput: move |evt: FormEvent| {
+                        if let Ok(v) = evt.value().parse::<f32>() {
+                            config.with_mut(|c| c.volume = (v / 100.0).clamp(0.0, 1.0));
+                        }
+                    },
+                }
+            }
+            div { class: "menu-actions",
+                button {
+                    class: "btn primary",
+                    onclick: move |_| *MENU_OPEN.write() = false,
+                    "Back to game"
+                }
+                button {
+                    class: "btn danger",
+                    onclick: {
+                        let runtime = runtime.clone();
+                        move |_| {
+                            // A lobby can't outlive the session it would
+                            // plug into.
+                            cable::leave();
+                            runtime.borrow_mut().close_session()
+                        }
+                    },
+                    "Quit game"
+                }
+            }
+            p { class: "hint", "{hints}" }
         }
     }
 }

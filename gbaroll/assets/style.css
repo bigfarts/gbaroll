@@ -659,8 +659,178 @@ main.settings-main .card:last-child {
     color: var(--text-dim);
 }
 
-.bindings {
-    margin-bottom: 12px;
+/* --- the GBA-shaped binding editor ----------------------------------- */
+
+/* The console plate, landscape like the machine: shoulders on the top
+   corners, d-pad left, screen center, A/B right, Start/Select under
+   the screen. Cells hold only the button + a one-line hint, so the
+   silhouette never reflows; the chips edit in the detail row below. */
+.gba {
+    display: grid;
+    grid-template-areas:
+        "l . r"
+        "dpad screen face"
+        "dpad pills face";
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px 22px;
+    max-width: 620px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    padding: 14px 18px 12px;
+    margin-bottom: 10px;
+}
+
+.gba-l { grid-area: l; justify-self: start; }
+.gba-r { grid-area: r; justify-self: end; }
+.gba-dpad { grid-area: dpad; }
+.gba-face { grid-area: face; }
+
+/* The screen bezel sells the silhouette; it labels nothing. */
+.gba-screen {
+    grid-area: screen;
+    justify-self: center;
+    width: min(200px, 100%);
+    aspect-ratio: 3 / 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-deep);
+    border: 6px solid var(--bg);
+    border-radius: 8px;
+    color: var(--text-dim);
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+}
+
+.gba-pills {
+    grid-area: pills;
+    justify-self: center;
+    align-self: start;
+    display: flex;
+    gap: 16px;
+}
+
+/* The d-pad cross. */
+.gba-dpad {
+    display: grid;
+    grid-template-areas:
+        ". up ."
+        "left . right"
+        ". down .";
+    gap: 2px;
+    justify-items: center;
+    align-items: center;
+}
+
+.dp-up { grid-area: up; }
+.dp-left { grid-area: left; }
+.dp-right { grid-area: right; }
+.dp-down { grid-area: down; }
+
+/* A/B on the classic diagonal. */
+.gba-face {
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 4px 6px;
+}
+
+.face-a { grid-column: 2; grid-row: 1; }
+.face-b { grid-column: 1; grid-row: 2; }
+
+/* One control: the button with its first binding hinted underneath in
+   a fixed-height line (so binding never shifts the plate). */
+.gba-bind {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+}
+
+.bind-hint {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 9px;
+    line-height: 12px;
+    height: 12px;
+    color: var(--text-dim);
+    max-width: 76px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gba-btn {
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    color: var(--text);
+    background: var(--bg-deep);
+    border: 1px solid var(--border);
+    /* A key-cap edge. */
+    border-bottom-width: 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.gba-btn:hover {
+    border-color: var(--accent);
+}
+
+.gba-btn.selected {
+    border-color: var(--accent);
+}
+
+.gba-btn.capturing {
+    border-color: var(--accent);
+    color: var(--accent);
+    animation: gba-pulse 1s ease-in-out infinite;
+}
+
+@keyframes gba-pulse {
+    50% {
+        box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent);
+    }
+}
+
+.gba-btn.round { width: 40px; height: 40px; border-radius: 50%; }
+.gba-btn.pad { width: 32px; height: 32px; border-radius: 7px; padding: 0; }
+.gba-btn.shoulder { min-width: 84px; height: 24px; padding: 0 14px; border-radius: 10px 10px 6px 6px; }
+.gba-btn.pill { height: 20px; padding: 0 12px; border-radius: 999px; font-size: 9px; text-transform: uppercase; }
+
+/* Fast-forward is not a console control; it rides below the plate. */
+.gba-extra {
+    display: flex;
+    margin-bottom: 4px;
+}
+
+.gba-extra .gba-bind {
+    flex-direction: row;
+    gap: 8px;
+}
+
+/* The selected control's bindings, one reserved row: chips remove on
+   click, and the capture prompt swaps in without moving anything. */
+.bind-detail {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-height: 34px;
+    max-width: 620px;
+    margin-bottom: 10px;
+    padding: 4px 2px;
+}
+
+.bind-detail-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
 }
 
 .chips {
@@ -778,41 +948,55 @@ main.settings-main .card:last-child {
     z-index: 10;
 }
 
+/* The menu/end panel wears the tele-card's language: same surface,
+   radius, and padding; sections stack left-aligned; actions fill the
+   row. One panel look everywhere. */
 .overlay-panel {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 16px;
-    text-align: center;
-    background: var(--surface);
+    gap: 10px;
+    background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 24px 28px;
-    min-width: 320px;
-    max-width: min(90%, 480px);
+    padding: 14px;
+    width: min(90%, 320px);
 }
 
 .overlay-head {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 2px;
 }
 
 .overlay-head h2 {
-    font-size: 18px;
+    font-size: 15px;
 }
 
+/* A quiet inset section, like the tele-card's control groups. */
 .menu-volume {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 5px;
-    font-size: 13px;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 10px;
+    background: var(--bg-deep);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+
+.menu-volume input[type="range"] {
+    width: 100%;
 }
 
 .menu-actions {
     display: flex;
-    gap: 10px;
+    gap: 8px;
+}
+
+.menu-actions .btn {
+    flex: 1;
+    justify-content: center;
 }
 
 .hint {
@@ -830,7 +1014,16 @@ main.settings-main .card:last-child {
     position: relative;
 }
 
-.cable-overlay {
+/* The invisible click-catcher behind a dropped card: above the touch
+   controls (6), below the chip row and card (8) — clicking anywhere
+   outside the card dismisses it. */
+.overlay-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 7;
+}
+
+.session-overlay {
     position: absolute;
     top: 12px;
     left: 50%;
@@ -839,9 +1032,9 @@ main.settings-main .card:last-child {
     flex-direction: column;
     align-items: center;
     gap: 8px;
-    /* Above the touch controls (6): the open cable card must cover
-       them, not fight them for touches. */
-    z-index: 7;
+    /* Above the touch controls (6) and the backdrop (7): the open
+       card must cover them, not fight them for touches. */
+    z-index: 8;
 }
 
 /* The menu + cable chips, paired at the top center on every screen. */
@@ -873,9 +1066,18 @@ main.settings-main .card:last-child {
     border-color: var(--accent);
 }
 
-/* Connected: the chip is just the signal glyph, colour-coded. */
+/* The chip's leading glyph rides in a constant box, so the cable icon
+   swapping for the (larger, colour-coded) signal bars at plug-in never
+   shifts the centered chip row. */
+.status-chip > .icon,
 .status-chip .signal {
     display: inline-flex;
+    justify-content: center;
+    width: 17px;
+    flex: none;
+}
+
+.status-chip .signal {
     font-size: 17px;
 }
 
@@ -935,6 +1137,7 @@ main.settings-main .card:last-child {
     display: flex;
     align-items: center;
     gap: 10px;
+    min-width: 0;
     padding: 7px 10px;
     background: var(--bg-deep);
     border: 1px solid var(--border);
@@ -946,6 +1149,12 @@ main.settings-main .card:last-child {
     display: flex;
     flex-direction: column;
     min-width: 0;
+}
+
+.roster-name > span:first-child {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .roster-name .game-title {
@@ -984,13 +1193,24 @@ main.settings-main .card:last-child {
 
 .tele-head {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
+    gap: 8px;
+    /* The title gets a hair of inset; the collapse button keeps to the
+       corner, its ghost padding folded back so it doesn't inflate the
+       head. */
+    padding: 2px 0 0 4px;
+}
+
+.tele-head .btn {
+    flex: none;
+    margin: -4px -4px 0 0;
 }
 
 .tele-head h3 {
     margin: 0;
     font-size: 14px;
+    line-height: 1.3;
 }
 
 .metric-card {
@@ -1160,7 +1380,7 @@ main.settings-main .card:last-child {
 
 /* On any touch screen the cable chip's icon is label enough. */
 @media (pointer: coarse) {
-    .cable-overlay .status-chip .chip-label {
+    .session-overlay .status-chip .chip-label {
         display: none;
     }
 }
@@ -1302,8 +1522,14 @@ main.settings-main .card:last-child {
     }
 
     /* The chip row keeps its top-center spot, just tighter. */
-    .cable-overlay {
+    .session-overlay {
         top: 6px;
+    }
+
+    /* Four seats in half the height. */
+    .tele-card .roster {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     }
 
     /* The pause badge ducks under the L shoulder. */

@@ -385,8 +385,11 @@ export class Rooms extends DurableObject<Env> {
     }
   }
 
-  private sendError(ws: WebSocket, kind: ErrorKind, message: string): void {
-    this.send(ws, serverError(kind, message));
+  private sendError(ws: WebSocket, kind: ErrorKind, detail: string): void {
+    // The wire carries only the kind — clients own the user-facing
+    // words; the detail stays here in the logs.
+    console.log(`error ${ErrorKind[kind]}: ${detail}`);
+    this.send(ws, serverError(kind, ""));
   }
 
   private sendTo(playerId: string, msg: ServerMessage): void {

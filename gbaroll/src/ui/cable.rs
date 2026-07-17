@@ -119,6 +119,24 @@ fn drain(ctx: Ctx, handle: lobby::LobbyHandle) {
                     }
                 }
                 LobbyEvent::Roster { players, your_idx } => {
+                    // Auto-report whether this side holds every ROM in
+                    // the roster (the wire's legacy ready bit): the host
+                    // blocks Start until every peer reports complete.
+                    // The server resets the bit on every occupancy
+                    // change, so each roster is re-asserted; sending
+                    // only on mismatch keeps the echo from looping.
+                    if your_idx != 0 {
+                        let have_all = {
+                            let lib = ctx.library.read();
+                            let lib = lib.as_ref().and_then(|v| v.as_ref()).map(|(l, _)| l);
+                            players
+                                .iter()
+                                .all(|p| lib.is_some_and(|l| l.by_crc32(p.rom_crc32).is_some()))
+                        };
+                        if players.get(your_idx).map(|p| p.ready) != Some(have_all) {
+                            handle.send(LobbyCommand::SetReady { ready: have_all });
+                        }
+                    }
                     if let Some(ui) = LOBBY_UI.write().as_mut() {
                         ui.players = players;
                         ui.my_idx = your_idx;
@@ -230,8 +248,26 @@ fn sanitize_room_code(input: &str) -> String {
         .collect()
 }
 
+/// The dropped cable card while the cable is out: header + body. (The
+/// connected state is `telemetry::TelemetryCard`.)
+#[component]
+pub fn CableCard() -> Element {
+    rsx! {
+        div { class: "tele-card",
+            div { class: "tele-head",
+                h3 { "Link cable" }
+                button {
+                    class: "btn ghost icon-btn",
+                    onclick: move |_| *PANEL_OPEN.write() = false,
+                    icons::ChevronUp {}
+                }
+            }
+            CableBody {}
+        }
+    }
+}
+
 /// The panel body while the cable is out: create/join, then the roster.
-/// (The connected state is `telemetry::CableOverlay`'s card.)
 #[component]
 pub fn CableBody() -> Element {
     let ctx = use_ctx();
@@ -309,13 +345,24 @@ pub fn CableBody() -> Element {
                                     style: "background: {super::telemetry::PEER_COLORS[idx % super::telemetry::PEER_COLORS.len()]}",
                                 }
                                 div { class: "roster-name",
-                                    span { "{player.nick}" }
+                                    span {
+                                        if player.nick.is_empty() {
+                                            "Player {idx + 1}"
+                                        } else {
+                                            "{player.nick}"
+                                        }
+                                    }
                                     span { class: "game-title", "{roster_names[idx]}" }
                                 }
                                 if idx == ui.my_idx {
                                     span { class: "you-badge", "you" }
                                 } else if !have_crc.contains(&player.rom_crc32) {
+                                    // *I* lack this seat's game.
                                     span { class: "link-notice", "missing this ROM" }
+                                } else if idx != 0 && !player.ready {
+                                    // The seat hasn't reported holding
+                                    // every ROM in the roster.
+                                    span { class: "link-notice", "missing a ROM" }
                                 }
                             }
                         } else {
@@ -332,12 +379,19 @@ pub fn CableBody() -> Element {
                 p { class: "sub cable-status",
                     {
                         let connected = ui.code.is_some();
+                        // The room is startable once everyone reported
+                        // holding every ROM — and the host's own copy
+                        // check passes too.
+                        let complete = ui.players.iter().all(|p| p.ready)
+                            && ui.players.iter().all(|p| have_crc.contains(&p.rom_crc32));
                         ui.status.clone().unwrap_or_else(|| {
                             if connected && !ui.starting {
                                 if ui.my_idx != 0 {
                                     "Waiting for the host to start.".to_string()
                                 } else if ui.players.len() < 2 {
                                     "Waiting for players to join.".to_string()
+                                } else if !complete {
+                                    "Someone is missing a ROM.".to_string()
                                 } else {
                                     String::new()
                                 }
@@ -349,14 +403,17 @@ pub fn CableBody() -> Element {
                 }
                 div { class: "menu-actions",
                     if ui.my_idx == 0 {
-                        // The host starts the room once anyone else is in.
-                        // Until then the button is simply gray — including
-                        // while the server connection is still coming up.
+                        // The host starts the room once anyone else is in
+                        // and every seat holds every ROM. Until then the
+                        // button is simply gray — including while the
+                        // server connection is still coming up.
                         button {
                             class: "btn primary",
                             disabled: ui.code.is_none()
                                 || ui.starting
-                                || ui.players.len() < 2,
+                                || ui.players.len() < 2
+                                || !ui.players.iter().all(|p| p.ready)
+                                || !ui.players.iter().all(|p| have_crc.contains(&p.rom_crc32)),
                             onclick: move |_| {
                                 if let Some(ui) = LOBBY_UI.write().as_mut() {
                                     ui.starting = true;

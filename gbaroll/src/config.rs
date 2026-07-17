@@ -41,7 +41,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            nick: "player".to_string(),
+            // Empty until the player names themselves; roster seats
+            // fall back to "Player N".
+            nick: String::new(),
             present_delay: 2,
             volume: 1.0,
             integer_scaling: true,
