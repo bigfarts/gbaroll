@@ -23,6 +23,10 @@ pub struct LobbyUi {
     pub my_idx: usize,
     pub starting: bool,
     pub status: Option<String>,
+    /// This client created the room (vs. joined one) — drives the code
+    /// auto-copy when the server assigns it. Known at lobby start,
+    /// unlike `my_idx`, which is a default 0 until the first roster.
+    pub created: bool,
 }
 
 thread_local! {
@@ -87,6 +91,7 @@ fn start_lobby(ctx: &Ctx, mode: LobbyMode) {
         (info.crc32, info.title.clone())
     };
 
+    let created = matches!(mode, LobbyMode::Create);
     let handle = lobby::spawn(lobby::LobbyArgs {
         server_url,
         nick,
@@ -95,7 +100,10 @@ fn start_lobby(ctx: &Ctx, mode: LobbyMode) {
         mode,
     });
     *LINK_NOTICE.write() = None;
-    *LOBBY_UI.write() = Some(LobbyUi::default());
+    *LOBBY_UI.write() = Some(LobbyUi {
+        created,
+        ..Default::default()
+    });
     *PANEL_OPEN.write() = true;
     drain(ctx.clone(), handle);
 }
@@ -318,7 +326,7 @@ pub fn CableBody() -> Element {
             if let Some(ui) = lobby_ui {
                 // Lobby: the room code, the roster, waiting for the start.
                 if let Some(code) = &ui.code {
-                    super::telemetry::RoomCode { code: code.clone() }
+                    super::telemetry::RoomCode { code: code.clone(), auto_copy: ui.created }
                 } else {
                     // The code button's exact footprint, so the panel
                     // doesn't reflow when the connection lands.

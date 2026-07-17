@@ -668,15 +668,25 @@ impl Runtime {
             }
         }
 
-        // Debug probe: the simulated frontier, readable from devtools /
-        // automation even while the tab is hidden and the UI is frozen.
+        // Debug probes: the simulated frontier and the newest advance's
+        // peak sio slices (the lockstep-livelock early-warning), readable
+        // from devtools / automation even while the tab is hidden and the
+        // UI is frozen — and by the watchdog's heartbeat records.
         if changed {
             if let Some(session) = &self.session {
-                let frontier = session.shared().stats.lock().unwrap().frontier;
+                let (frontier, slices) = {
+                    let stats = session.shared().stats.lock().unwrap();
+                    (stats.frontier, stats.slices_peak)
+                };
                 let _ = js_sys::Reflect::set(
                     &js_sys::global(),
                     &"gbarollFrontier".into(),
                     &(frontier as f64).into(),
+                );
+                let _ = js_sys::Reflect::set(
+                    &js_sys::global(),
+                    &"gbarollSlices".into(),
+                    &(slices as f64).into(),
                 );
             }
         }
@@ -695,6 +705,18 @@ impl Runtime {
             &js_sys::global(),
             &"gbarollSpeedUp".into(),
             &self.mapping.speed_up_held(&self.held).into(),
+        );
+        // Debug probe: the running session's kind, so the watchdog's
+        // heartbeat records say what a wedge interrupted.
+        let _ = js_sys::Reflect::set(
+            &js_sys::global(),
+            &"gbarollSession".into(),
+            &match self.session.as_ref().map(|s| s.kind()) {
+                Some(SessionKind::Netplay) => "netplay",
+                Some(SessionKind::Local) => "local",
+                None => "none",
+            }
+            .into(),
         );
 
         // Present + UI signal: only on the visible-path source.

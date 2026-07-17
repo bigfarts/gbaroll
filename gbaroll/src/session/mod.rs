@@ -123,6 +123,7 @@ pub struct MetricSample {
     pub skew: i32,
     pub lead: i32,
     pub depth: u32,
+    pub slices: u32,
     pub pings: Vec<Option<f32>>,
 }
 
@@ -134,6 +135,7 @@ impl MetricSample {
             skew: stats.skew,
             lead: stats.queue_len as i32,
             depth: stats.rolled_back,
+            slices: stats.slices_peak,
             pings: stats.peers.iter().map(|p| p.rtt_ms).collect(),
         }
     }
@@ -148,6 +150,11 @@ pub struct Stats {
     pub rolled_back: u32,
     pub confirmed: u32,
     pub frontier: u32,
+    /// Peak sio run_loop slices a single simulated tick took inside the
+    /// newest advance — the lockstep-livelock early-warning (normal is a
+    /// few hundred to a few thousand; a sustained climb means the link is
+    /// grinding toward the slice cap).
+    pub slices_peak: u32,
     /// Actually achieved simulated ticks per second (measured over a
     /// rolling one-second window), as opposed to `fps_target` (the pace
     /// the throttler is currently asking for).

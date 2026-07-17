@@ -23,6 +23,7 @@ pub fn main() {
     install_panic_hook();
     let _ = console_log::init_with_level(log::Level::Info);
     mgba::log::install_default_logger();
+    install_watchdog();
     dioxus::launch(crate::ui::App);
 }
 
@@ -43,10 +44,121 @@ fn install_panic_hook() {
                 .map(String::from)
                 .unwrap_or_else(|_| "\"?\"".into())
         );
-        if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-            let _ = storage.set_item("gbaroll-panic", &record);
+        if let Some(storage) = local_storage() {
+            let _ = storage.set_item(PANIC_KEY, &record);
         }
     }));
+}
+
+/// The watchdog's persisted keys. `gbaroll-heartbeat` is the newest
+/// stamp; `-prev` is the previous page load's final stamp (a wedge's
+/// time of death); `gbaroll-stalls` is JSONL, newest last.
+const HEARTBEAT_KEY: &str = "gbaroll-heartbeat";
+const HEARTBEAT_PREV_KEY: &str = "gbaroll-heartbeat-prev";
+const STALLS_KEY: &str = "gbaroll-stalls";
+const PANIC_KEY: &str = "gbaroll-panic";
+
+/// Gaps between watchdog firings longer than this are recorded as
+/// stalls. Hidden-tab timer throttling stretches the interval
+/// legitimately (up to a minute under intensive throttling), so every
+/// record carries a `hidden` flag to discount those.
+const STALL_MS: f64 = 2_500.0;
+/// Stall records kept, newest last.
+const MAX_STALL_RECORDS: usize = 40;
+
+/// The in-app wedge watchdog: a 1s interval on the event loop that
+/// (a) stamps a heartbeat — wall time, monotonic time, the runtime's
+/// `gbarollFrontier`/`gbarollSlices`/`gbarollSession` probes — into
+/// localStorage, so a hard wedge (main thread stuck inside wasm, no
+/// panic) leaves its time of death and last-known state behind; and
+/// (b) records any gap over [`STALL_MS`] between firings — the event
+/// loop was blocked that long, the signature of a recovering grind.
+/// At startup the previous life's tail (panic, stalls, final heartbeat)
+/// is logged, so a wedge's post-mortem survives the reload that clears
+/// the console. (The devtools-injected watchdog from the first wedge
+/// hunt died with every reload; this one is part of the app.)
+fn install_watchdog() {
+    let Some(storage) = local_storage() else {
+        return;
+    };
+    if let Ok(Some(p)) = storage.get_item(PANIC_KEY) {
+        log::warn!("previous life panicked: {p} (localStorage[{PANIC_KEY:?}])");
+    }
+    if let Ok(Some(hb)) = storage.get_item(HEARTBEAT_KEY) {
+        log::info!("previous life's final heartbeat: {hb}");
+        let _ = storage.set_item(HEARTBEAT_PREV_KEY, &hb);
+    }
+    if let Ok(Some(stalls)) = storage.get_item(STALLS_KEY) {
+        let n = stalls.lines().count();
+        if n > 0 {
+            log::warn!(
+                "{n} recorded main-thread stall(s), newest {} — \
+                 localStorage[{STALLS_KEY:?}], removeItem to clear",
+                stalls.lines().last().unwrap_or_default()
+            );
+        }
+    }
+
+    let last = std::cell::Cell::new(performance_now());
+    gloo_timers::callback::Interval::new(1_000, move || {
+        let Some(storage) = local_storage() else {
+            return;
+        };
+        let now = performance_now();
+        let gap = now - last.replace(now);
+        let frontier = js_number_global("gbarollFrontier").unwrap_or(-1.0);
+        let slices = js_number_global("gbarollSlices").unwrap_or(-1.0);
+        let session = js_string_global("gbarollSession").unwrap_or_else(|| "?".into());
+        let at = String::from(js_sys::Date::new_0().to_iso_string());
+        let _ = storage.set_item(
+            HEARTBEAT_KEY,
+            &format!(
+                "{{\"at\":\"{at}\",\"mono\":{now:.0},\"frontier\":{frontier},\
+                 \"slices\":{slices},\"session\":\"{session}\"}}"
+            ),
+        );
+        if gap > STALL_MS {
+            let hidden = web_sys::window()
+                .and_then(|w| w.document())
+                .map(|d| d.hidden())
+                .unwrap_or(false);
+            let mut lines: Vec<String> = storage
+                .get_item(STALLS_KEY)
+                .ok()
+                .flatten()
+                .map(|s| s.lines().map(str::to_owned).collect())
+                .unwrap_or_default();
+            lines.push(format!(
+                "{{\"at\":\"{at}\",\"gap_ms\":{gap:.0},\"hidden\":{hidden},\
+                 \"frontier\":{frontier},\"session\":\"{session}\"}}"
+            ));
+            let start = lines.len().saturating_sub(MAX_STALL_RECORDS);
+            let _ = storage.set_item(STALLS_KEY, &lines[start..].join("\n"));
+        }
+    })
+    .forget();
+}
+
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+}
+
+fn performance_now() -> f64 {
+    web_sys::window().unwrap().performance().unwrap().now()
+}
+
+/// A numeric debug probe the runtime pump publishes on `globalThis`.
+fn js_number_global(name: &str) -> Option<f64> {
+    js_sys::Reflect::get(&js_sys::global(), &name.into())
+        .ok()
+        .and_then(|v| v.as_f64())
+}
+
+/// A string debug probe the runtime pump publishes on `globalThis`.
+fn js_string_global(name: &str) -> Option<String> {
+    js_sys::Reflect::get(&js_sys::global(), &name.into())
+        .ok()
+        .and_then(|v| v.as_string())
 }
 
 /// Ensure the audio sink exists (must run within a user gesture), then

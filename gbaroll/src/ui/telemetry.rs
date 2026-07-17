@@ -21,7 +21,14 @@ const TPS_SPAN: f32 = 8.0; // ticks/sec below target
 const SKEW_SPAN: f32 = 8.0; // ± ticks
 const LEAD_SPAN: f32 = 24.0; // unmatched local ticks
 const DEPTH_SPAN: f32 = 8.0; // rolled-back ticks
+const SLICES_SPAN: f32 = 8_000.0; // sio run_loop slices per tick
 const PING_SPAN: f32 = 200.0; // ms
+
+// Slice tone thresholds: measured peaks on a maximally chatty link are
+// ~1.6K (2p) / ~3.2K (4p); the engine errors out at 100K. A sustained
+// climb through amber is the lockstep-livelock early-warning.
+const SLICES_GOOD: i32 = 4_000;
+const SLICES_WARN: i32 = 20_000;
 
 /// Sparkline backing store (CSS stretches the width).
 const SPARK_W: u32 = 180;
@@ -275,6 +282,26 @@ fn metrics_from(history: &std::collections::VecDeque<MetricSample>) -> Vec<Metri
                 .map(|s| tone_for_abs(s.depth as i32, 2, 5))
                 .unwrap_or(Tone::Muted),
         },
+        Metric {
+            canvas_id: "tele-slices",
+            icon: || rsx! { icons::Activity {} },
+            caption: "Sio slices".to_string(),
+            fill_under: true,
+            zero: None,
+            points: history
+                .iter()
+                .map(|s| {
+                    Some((
+                        (s.slices as f32 / SLICES_SPAN).clamp(0.0, 1.0),
+                        tone_for_abs(s.slices as i32, SLICES_GOOD, SLICES_WARN),
+                    ))
+                })
+                .collect(),
+            value: latest.map(|s| format!("{}", s.slices)).unwrap_or("—".into()),
+            value_tone: latest
+                .map(|s| tone_for_abs(s.slices as i32, SLICES_GOOD, SLICES_WARN))
+                .unwrap_or(Tone::Muted),
+        },
     ]
 }
 
@@ -502,26 +529,49 @@ fn TelemetryCards(ctx_key: u64) -> Element {
     }
 }
 
+/// The last code auto-copied at room creation. The cable panel unmounts
+/// and remounts as it closes and reopens, so the component can't keep
+/// this one-shot itself — and only the creation should touch the
+/// clipboard, never a re-render of the same room.
+static AUTO_COPIED: GlobalSignal<Option<String>> = Signal::global(|| None);
+
+/// Copy `code` to the clipboard and flash the button's "Copied" state
+/// for `hold_ms`. No flash when the browser refuses the write (focus or
+/// permission) — the button still offers click-to-copy.
+async fn copy_code(code: String, mut copied: Signal<bool>, hold_ms: u32) {
+    let clipboard = web_sys::window().unwrap().navigator().clipboard();
+    if wasm_bindgen_futures::JsFuture::from(clipboard.write_text(&code))
+        .await
+        .is_ok()
+    {
+        copied.set(true);
+        gloo_timers::future::TimeoutFuture::new(hold_ms).await;
+        copied.set(false);
+    }
+}
+
 /// A deliberately button-shaped room code: click to copy. Shared with
 /// the lobby body, which shows the same code before the cable is in.
+/// With `auto_copy` (the room's creator), the code lands in the
+/// clipboard by itself the moment the server assigns it.
 #[component]
-pub fn RoomCode(code: String) -> Element {
-    let mut copied = use_signal(|| false);
+pub fn RoomCode(code: String, auto_copy: bool) -> Element {
+    let copied = use_signal(|| false);
+    // The macro moves its dependencies, so the effect gets its own copy.
+    let auto_code = code.clone();
+    use_effect(use_reactive!(|(auto_code, auto_copy)| {
+        if auto_copy && AUTO_COPIED.peek().as_ref() != Some(&auto_code) {
+            *AUTO_COPIED.write() = Some(auto_code.clone());
+            spawn(copy_code(auto_code.clone(), copied, 2_500));
+        }
+    }));
     rsx! {
         button {
             class: if copied() { "btn primary room-code-btn" } else { "btn room-code-btn" },
             onclick: {
                 let code = code.clone();
                 move |_| {
-                    let code = code.clone();
-                    spawn(async move {
-                        let clipboard = web_sys::window().unwrap().navigator().clipboard();
-                        let _ =
-                            wasm_bindgen_futures::JsFuture::from(clipboard.write_text(&code)).await;
-                        copied.set(true);
-                        gloo_timers::future::TimeoutFuture::new(1_500).await;
-                        copied.set(false);
-                    });
+                    spawn(copy_code(code.clone(), copied, 1_500));
                 }
             },
             span { class: "room-code-label",

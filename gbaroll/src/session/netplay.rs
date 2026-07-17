@@ -514,6 +514,7 @@ impl NetplayDriver {
             stats.rolled_back = report.rolled_back;
             stats.confirmed = report.confirmed;
             stats.frontier = report.frontier;
+            stats.slices_peak = report.slices_peak;
             stats.tps = self.tick_times.len() as f32;
             stats.fps_target = fps_target;
             stats.peers = self
