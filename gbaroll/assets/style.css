@@ -831,12 +831,27 @@ main.settings-main .card:last-child {
     z-index: 7;
 }
 
+/* The one chip styling, desktop and touch alike: a quiet pill wearing
+   the touch controls' numbers (its label hides on touch, where the
+   icon rides next to the menu pill). */
 .btn.status-chip {
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    background: var(--surface);
-    border: 1px solid var(--border);
+    height: 26px;
+    padding: 0 14px;
+    border-radius: 999px;
+    background: rgba(36, 40, 59, 0.4);
+    border: 1px solid rgba(59, 66, 97, 0.6);
+    color: var(--text-dim);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.btn.status-chip:hover {
+    color: var(--text);
+    border-color: var(--accent);
 }
 
 /* Connected: the chip is just the signal glyph, colour-coded. */
@@ -1290,18 +1305,6 @@ main.settings-main .card:last-child {
         left: 50%;
         transform: translateX(6px);
         align-items: flex-start;
-    }
-
-    .cable-overlay .btn.status-chip {
-        height: 26px;
-        padding: 0 14px;
-        border-radius: 999px;
-        background: rgba(36, 40, 59, 0.4);
-        border: 1px solid rgba(59, 66, 97, 0.6);
-        color: var(--text-dim);
-        font-size: 10px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
     }
 
     /* The pause badge ducks under the L shoulder. */

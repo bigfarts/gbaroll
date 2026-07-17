@@ -19,6 +19,7 @@ pub fn SessionView() -> Element {
         runtime,
         mut config,
         library,
+        mut library_rev,
         ..
     } = use_ctx();
 
@@ -39,7 +40,13 @@ pub fn SessionView() -> Element {
     }
     {
         let runtime = runtime.clone();
-        use_drop(move || runtime.borrow_mut().detach_canvas());
+        use_drop(move || {
+            runtime.borrow_mut().detach_canvas();
+            // Leaving the session lands back on the pickers, and the
+            // session's SRAM write-back probably created (or updated)
+            // a save — rescan so it shows immediately.
+            *library_rev.write() += 1;
+        });
     }
 
     // Reactive inputs: per-frame stats, structural session changes, and
