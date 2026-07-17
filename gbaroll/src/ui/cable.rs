@@ -393,6 +393,15 @@ pub fn CableBody() -> Element {
                             div { class: "roster-row open",
                                 span { class: "dot hollow" }
                                 span { "Open slot" }
+                                // A zero-width ghost of the two-line name
+                                // block props the row to a seat's exact
+                                // height (font metrics vary across the
+                                // Comic fallbacks, so no fixed min-height
+                                // holds); dot and label centre against it.
+                                div { class: "roster-name",
+                                    span { "\u{a0}" }
+                                    span { class: "game-title", "\u{a0}" }
+                                }
                             }
                         }
                     }

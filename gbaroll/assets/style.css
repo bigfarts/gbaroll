@@ -1213,6 +1213,11 @@ main.settings-main .card:last-child {
     border: 1px dashed var(--text-dim);
 }
 
+/* The open row's ghost name block: height only, no width. */
+.roster-row.open .roster-name {
+    width: 0;
+}
+
 .ping-peer .nick {
     flex: 1;
     min-width: 0;
