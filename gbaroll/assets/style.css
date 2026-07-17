@@ -356,6 +356,19 @@ main.settings-main .card:last-child {
     border-bottom: 1px solid var(--border);
 }
 
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* The mark carries its own padding; oversize it a touch so the art
+   matches the type's optical height. */
+.brand .logo {
+    height: 32px;
+    width: 32px;
+}
+
 .brand h1 {
     font-size: 14px;
     letter-spacing: 0.03em;

@@ -27,6 +27,8 @@ const APPLE_TOUCH_ICON: Asset =
 #[used]
 static ICON_512: Asset =
     asset!("/assets/icon-512.png", AssetOptions::builder().with_hash_suffix(false));
+/// The in-app logo (the topbar). Hashed like any other asset.
+const LOGO: Asset = asset!("/assets/icon.svg");
 
 #[component]
 pub fn App() -> Element {
@@ -163,6 +165,7 @@ fn Shell() -> Element {
             ondrop: move |evt| evt.prevent_default(),
             header { class: "topbar",
                 div { class: "brand",
+                    img { class: "logo", src: LOGO, alt: "" }
                     h1 { "gbaroll" }
                 }
                 nav { class: "tabs",

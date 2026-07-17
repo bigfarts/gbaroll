@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <!-- Full-bleed backdrop so the same art works as a maskable icon. -->
-  <rect width="512" height="512" fill="#16161e"/>
+
+
   <!-- AGB-001 geometry from icons8's "gameboy-advance-console"
        (48x48), recolored to the app palette: the full-width slab
        forms the grips, the pinched front panel arcs between them,
