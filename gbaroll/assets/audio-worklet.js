@@ -1,36 +1,47 @@
-// The gbaroll audio sink: an interleaved-i16 ring buffer the main
-// thread fills via port.postMessage (no SharedArrayBuffer anywhere).
-// Every 4th render quantum (~10.7ms at 48kHz) it reports its queue
-// depth back — which the main thread also uses as a tick source when
-// the tab is hidden and requestAnimationFrame stops.
+// The gbaroll audio sink's shell. The ring buffer and mixdown live in
+// gbaroll-worklet's wasm module, shipped in via processorOptions (this
+// scope can't fetch); a worklet can't be JS-free, so this class is
+// just the registration, the copies across the wasm boundary, and the
+// queue-depth report every 4th render quantum (~10.7ms at 48kHz) —
+// which the main thread also uses as a tick source when the tab is
+// hidden and requestAnimationFrame stops. Interleaved-i16 chunks
+// arrive via port.postMessage (no SharedArrayBuffer anywhere).
 class GbarollSink extends AudioWorkletProcessor {
-    constructor() {
+    constructor(options) {
         super();
-        this.capacity = 16384; // frames
-        this.ring = new Int16Array(this.capacity * 2);
-        this.readPos = 0;
-        this.len = 0;
+        // Sync compile: a few KB of dependency-free code, and worklet
+        // scopes allow it (the main thread's 4KB limit doesn't apply).
+        const module = new WebAssembly.Module(options.processorOptions.wasm);
+        this.wasm = new WebAssembly.Instance(module, {}).exports;
+        // All state is static — the memory never grows, so these views
+        // stay valid for the processor's lifetime.
+        const memory = this.wasm.memory.buffer;
+        this.pushBuf = new Int16Array(
+            memory,
+            this.wasm.push_ptr(),
+            this.wasm.push_capacity() * 2
+        );
+        this.outL = new Float32Array(
+            memory,
+            this.wasm.out_l_ptr(),
+            this.wasm.quantum_capacity()
+        );
+        this.outR = new Float32Array(
+            memory,
+            this.wasm.out_r_ptr(),
+            this.wasm.quantum_capacity()
+        );
         this.sinceReport = 0;
         this.port.onmessage = (e) => this.push(e.data);
     }
 
-    // chunk: Int16Array of interleaved stereo frames.
+    // chunk: Int16Array of interleaved stereo frames, any length.
     push(chunk) {
-        let frames = chunk.length >> 1;
-        // Overflow: drop oldest so latency stays bounded.
-        const overflow = this.len + frames - this.capacity;
-        if (overflow > 0) {
-            this.readPos = (this.readPos + overflow) % this.capacity;
-            this.len -= overflow;
+        for (let done = 0; done < chunk.length; done += this.pushBuf.length) {
+            const part = chunk.subarray(done, done + this.pushBuf.length);
+            this.pushBuf.set(part);
+            this.wasm.push(part.length >> 1);
         }
-        let writePos = (this.readPos + this.len) % this.capacity;
-        for (let i = 0; i < frames; i++) {
-            const w = writePos * 2;
-            this.ring[w] = chunk[i * 2];
-            this.ring[w + 1] = chunk[i * 2 + 1];
-            writePos = (writePos + 1) % this.capacity;
-        }
-        this.len += frames;
     }
 
     process(inputs, outputs) {
@@ -40,29 +51,14 @@ class GbarollSink extends AudioWorkletProcessor {
         // gets a proper downmix rather than one side of every pan.
         const right = out[1] || null;
         const n = left.length;
-        for (let i = 0; i < n; i++) {
-            if (this.len > 0) {
-                const r = this.readPos * 2;
-                const l = this.ring[r] / 32768;
-                const rr = this.ring[r + 1] / 32768;
-                if (right) {
-                    left[i] = l;
-                    right[i] = rr;
-                } else {
-                    left[i] = (l + rr) / 2;
-                }
-                this.readPos = (this.readPos + 1) % this.capacity;
-                this.len--;
-            } else {
-                left[i] = 0;
-                if (right) {
-                    right[i] = 0;
-                }
-            }
+        this.wasm.render(n, right ? 1 : 0);
+        left.set(this.outL.subarray(0, n));
+        if (right) {
+            right.set(this.outR.subarray(0, n));
         }
         if (++this.sinceReport >= 4) {
             this.sinceReport = 0;
-            this.port.postMessage(this.len);
+            this.port.postMessage(this.wasm.queue_len());
         }
         return true;
     }

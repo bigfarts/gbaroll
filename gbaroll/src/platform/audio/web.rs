@@ -1,13 +1,15 @@
 //! The web audio sink: an `AudioContext` + `AudioWorkletNode` whose
-//! processor holds a short ring buffer (assets/audio-worklet.js). The
-//! worklet runs on the browser's audio rendering thread and cannot call
-//! into this wasm module, so the flow inverts relative to a native
-//! callback backend: the runtime pump *pushes* — it computes the sink's
-//! deficit against a fixed latency target, pulls that many frames
-//! through the [`LateBinder`](super::LateBinder), and postMessages the
-//! chunk over. The worklet reports its queue depth back every ~10.7ms;
-//! that report is also the pump's hidden-tab tick source, since it
-//! keeps firing when requestAnimationFrame stops.
+//! processor holds a short ring buffer — Rust in gbaroll-worklet's
+//! wasm module, wrapped by the registration shell in
+//! assets/audio-worklet.js. The worklet runs on the browser's audio
+//! rendering thread and cannot call into this wasm module, so the flow
+//! inverts relative to a native callback backend: the runtime pump
+//! *pushes* — it computes the sink's deficit against a fixed latency
+//! target, pulls that many frames through the
+//! [`LateBinder`](super::LateBinder), and postMessages the chunk over.
+//! The worklet reports its queue depth back every ~10.7ms; that report
+//! is also the pump's hidden-tab tick source, since it keeps firing
+//! when requestAnimationFrame stops.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -25,6 +27,11 @@ const TARGET_QUEUED_FRAMES: u32 = 3072;
 
 /// Don't bother posting chunks smaller than this (one render quantum).
 const MIN_CHUNK_FRAMES: u32 = 128;
+
+/// The processor's DSP module (../gbaroll-worklet), compiled by
+/// build.rs. Shipped to the worklet via processorOptions: its scope
+/// can't fetch, and the main wasm-bindgen module can't run there.
+const WORKLET_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gbaroll_worklet.wasm"));
 
 pub struct WebAudio {
     ctx: web_sys::AudioContext,
@@ -58,6 +65,15 @@ impl WebAudio {
         let node_opts = web_sys::AudioWorkletNodeOptions::new();
         let counts = js_sys::Array::of1(&wasm_bindgen::JsValue::from_f64(2.0));
         node_opts.set_output_channel_count(&counts);
+        // The DSP module rides along; the shim compiles and
+        // instantiates it in the worklet scope.
+        let processor_opts = js_sys::Object::new();
+        js_sys::Reflect::set(
+            &processor_opts,
+            &"wasm".into(),
+            &js_sys::Uint8Array::from(WORKLET_WASM).into(),
+        )?;
+        node_opts.set_processor_options(Some(&processor_opts));
         let node =
             web_sys::AudioWorkletNode::new_with_options(&ctx, "gbaroll-sink", &node_opts)?;
         node.connect_with_audio_node(&ctx.destination())?;

@@ -1,8 +1,9 @@
 //! Audio core: a Stream trait, a late-binding mux so the host output
 //! stream can outlive any one session, and the LinkStream adapter for
 //! live links. `web.rs` is the sink: an AudioWorklet fed by the runtime
-//! pump. (`replay.rs` is present but not compiled until the replay
-//! playback port lands.)
+//! pump, whose ring buffer is gbaroll-worklet's wasm module.
+//! (`replay.rs` is present but not compiled until the replay playback
+//! port lands.)
 
 pub mod web;
 
