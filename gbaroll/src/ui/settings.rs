@@ -188,6 +188,46 @@ pub fn SettingsScreen() -> Element {
                 }
             }
         }
+        // The credits roll. External links must open in a new tab —
+        // in-place navigation would tear down the running app.
+        section { class: "card credits",
+            h2 { "Credits" }
+            p { "gbaroll v{VERSION} · MPL-2.0 · built on:" }
+            ul {
+                li {
+                    Ext { href: "https://mgba.io", label: "mGBA" }
+                    " — the emulator core, by endrift and contributors (MPL-2.0)"
+                }
+                li {
+                    Ext { href: "https://dioxuslabs.com", label: "Dioxus" }
+                    " — the UI framework"
+                }
+                li {
+                    Ext { href: "https://lucide.dev", label: "Lucide" }
+                    " — the icons (ISC)"
+                }
+                li {
+                    Ext { href: "https://comicneue.com", label: "Comic Neue" }
+                    " (OFL) and "
+                    Ext { href: "https://dtinth.github.io/comic-mono-font/", label: "Comic Mono" }
+                    " (MIT) — the fonts"
+                }
+                li {
+                    Ext { href: "https://no-intro.org", label: "No-Intro" }
+                    " — the game-name database"
+                }
+            }
+        }
+    }
+}
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// A credits link out of the app: new tab, no opener.
+#[component]
+fn Ext(href: &'static str, label: &'static str) -> Element {
+    rsx! {
+        a { href, target: "_blank", rel: "noopener", "{label}" }
     }
 }
 

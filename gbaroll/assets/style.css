@@ -377,6 +377,33 @@ main.settings-main .card:last-child {
     border-bottom: none;
 }
 
+/* The credits roll at the bottom of Settings: dim like .sub, links in
+   the accent. The only anchors in the app live here. */
+.credits p,
+.credits ul {
+    color: var(--text-dim);
+    font-size: 12px;
+    margin: 0;
+}
+
+.credits ul {
+    padding-left: 18px;
+}
+
+.credits li {
+    margin-top: 4px;
+}
+
+.credits a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.credits a:hover {
+    color: var(--accent-strong);
+    text-decoration: underline;
+}
+
 /* A toolbar strip, not a page header: full-bleed, fixed height,
    everything vertically centered. */
 .topbar {
