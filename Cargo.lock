@@ -2071,7 +2071,7 @@ dependencies = [
 [[package]]
 name = "mgba"
 version = "4.0.32"
-source = "git+https://github.com/tangobattle/mgba-rs#aac2a36290b6906820f9acf945f72b51a02c80da"
+source = "git+https://github.com/tangobattle/mgba-rs#52662b11a3c63dccdd10c322dfc1867e2d43d516"
 dependencies = [
  "log",
  "mgba-sys",
@@ -2082,7 +2082,7 @@ dependencies = [
 [[package]]
 name = "mgba-siolink"
 version = "0.1.0"
-source = "git+https://github.com/tangobattle/mgba-siolink#ae7662515ce047da1c26398c075f92ac3a7d0535"
+source = "git+https://github.com/tangobattle/mgba-siolink#e2960da5bef0c9cf423c551a6c3bb8e7d39ac2be"
 dependencies = [
  "crc32fast",
  "getgud",
@@ -2094,7 +2094,7 @@ dependencies = [
 [[package]]
 name = "mgba-sys"
 version = "0.1.0"
-source = "git+https://github.com/tangobattle/mgba-rs#aac2a36290b6906820f9acf945f72b51a02c80da"
+source = "git+https://github.com/tangobattle/mgba-rs#52662b11a3c63dccdd10c322dfc1867e2d43d516"
 dependencies = [
  "bindgen",
  "cc",

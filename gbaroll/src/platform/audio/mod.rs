@@ -137,7 +137,7 @@ pub struct LinkStream {
     shared: std::sync::Arc<crate::session::SharedSession>,
     sample_rate: u32,
     resampler: mgba::audio::AudioResampler,
-    dest_buffer: mgba::audio::AudioBuffer,
+    dest_buffer: mgba::audio::OwnedAudioBuffer,
     /// Tracked separately because `mAudioBuffer` doesn't expose
     /// capacity through the Rust binding; grown lazily in `fill`.
     dest_capacity: usize,
@@ -157,7 +157,7 @@ impl LinkStream {
             shared,
             sample_rate,
             resampler: mgba::audio::AudioResampler::new(),
-            dest_buffer: mgba::audio::AudioBuffer::new(dest_capacity, NUM_CHANNELS as u32),
+            dest_buffer: mgba::audio::OwnedAudioBuffer::new(dest_capacity, NUM_CHANNELS as u32),
             dest_capacity,
             discard: Vec::new(),
         }
@@ -185,7 +185,7 @@ impl Stream for LinkStream {
         let needed = frame_count.saturating_mul(2);
         if needed > self.dest_capacity {
             let new_capacity = needed.next_power_of_two().max(SAMPLES * 2);
-            self.dest_buffer = mgba::audio::AudioBuffer::new(new_capacity, NUM_CHANNELS as u32);
+            self.dest_buffer = mgba::audio::OwnedAudioBuffer::new(new_capacity, NUM_CHANNELS as u32);
             self.dest_capacity = new_capacity;
         }
 
