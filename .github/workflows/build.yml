@@ -52,6 +52,12 @@ jobs:
       - name: Stamp the Pages domain
         run: echo "gbaroll.farts.fyi" > target/dx/gbaroll/release/web/public/CNAME
 
+      # The service worker's URL sets its scope, Pages can't send
+      # Service-Worker-Allowed to widen one, and dx flattens bundled
+      # assets into /assets/ — so the root copy happens here.
+      - name: Root the service worker
+        run: cp gbaroll/sw.js target/dx/gbaroll/release/web/public/sw.js
+
       - name: Upload the Pages bundle
         uses: actions/upload-pages-artifact@v3
         with:

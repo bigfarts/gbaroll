@@ -13,6 +13,20 @@ use crate::runtime::{Runtime, SESSION_EPOCH};
 use crate::storage::Storage;
 
 const STYLE: Asset = asset!("/assets/style.css");
+/// Unhashed: the manifest names the icons by path, so both sides keep
+/// stable names (the shell's own tags resolve through the assets).
+const MANIFEST: Asset = asset!(
+    "/assets/manifest.webmanifest",
+    AssetOptions::builder().with_hash_suffix(false)
+);
+const ICON: Asset = asset!("/assets/icon-192.png", AssetOptions::builder().with_hash_suffix(false));
+const APPLE_TOUCH_ICON: Asset =
+    asset!("/assets/icon-180.png", AssetOptions::builder().with_hash_suffix(false));
+/// Referenced only from inside the manifest, so nothing in Rust reads
+/// it — `#[used]` keeps it in the bundle.
+#[used]
+static ICON_512: Asset =
+    asset!("/assets/icon-512.png", AssetOptions::builder().with_hash_suffix(false));
 
 #[component]
 pub fn App() -> Element {
@@ -112,6 +126,11 @@ pub fn App() -> Element {
             content: "width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no",
         }
         document::Meta { name: "theme-color", content: "#16161e" }
+        // Installable app: manifest plus icons (Safari ignores the
+        // manifest's icons and wants its own link).
+        document::Link { rel: "manifest", href: MANIFEST }
+        document::Link { rel: "icon", href: ICON }
+        document::Link { rel: "apple-touch-icon", href: APPLE_TOUCH_ICON }
         if in_session {
             session_view::SessionView {}
         } else {

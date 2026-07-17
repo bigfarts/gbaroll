@@ -24,7 +24,30 @@ pub fn main() {
     let _ = console_log::init_with_level(log::Level::Info);
     mgba::log::install_default_logger();
     install_watchdog();
+    install_service_worker();
     dioxus::launch(crate::ui::App);
+}
+
+/// Register the offline-shell service worker (../../sw.js). The file
+/// sits at the site root, not in the asset bundle: its URL sets the
+/// registration scope, GitHub Pages can't send Service-Worker-Allowed
+/// headers to widen one, and dx flattens every bundled asset into
+/// /assets/ — so CI copies it beside index.html instead. Debug builds
+/// skip registration: dx serve doesn't serve the file, and a
+/// cache-first shell fights hot reload anyway. Fire-and-forget:
+/// losing it (insecure context, private browsing) only loses offline
+/// support.
+fn install_service_worker() {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let Some(window) = web_sys::window() else { return };
+    let promise = window.navigator().service_worker().register("/sw.js");
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(e) = wasm_bindgen_futures::JsFuture::from(promise).await {
+            log::warn!("service worker registration failed: {e:?}");
+        }
+    });
 }
 
 /// The console panic hook, plus a durable copy: a panic on wasm never
