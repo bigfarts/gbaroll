@@ -863,15 +863,6 @@ fn install_keyboard(runtime: Weak<RefCell<Runtime>>) {
         let runtime = runtime.clone();
         let closure: Closure<dyn FnMut(web_sys::KeyboardEvent)> =
             Closure::new(move |e: web_sys::KeyboardEvent| {
-                // Text inputs keep their keys.
-                if let Some(target) = e.target() {
-                    if let Some(el) = target.dyn_ref::<web_sys::Element>() {
-                        let tag = el.tag_name();
-                        if tag == "INPUT" || tag == "TEXTAREA" || tag == "SELECT" {
-                            return;
-                        }
-                    }
-                }
                 let code = e.code();
                 // Binding capture: the next key press becomes the binding
                 // (Escape cancels); either way, neither the game nor the
@@ -888,6 +879,13 @@ fn install_keyboard(runtime: Weak<RefCell<Runtime>>) {
                 }
                 let Some(rt) = runtime.upgrade() else { return };
                 let Ok(mut rt) = rt.try_borrow_mut() else { return };
+                // Keys belong to the page unless something here consumes
+                // them: a live session (game input, the Escape overlays)
+                // or its menu. Anywhere else — pickers, settings, lobby —
+                // native behavior (buttons, forms, focus) wins.
+                if rt.shared().is_none() && !*MENU_OPEN.peek() {
+                    return;
+                }
                 // Escape drives the overlays, never the game: it
                 // collapses the cable panel first, then toggles the menu.
                 if code == "Escape" {

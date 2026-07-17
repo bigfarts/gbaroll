@@ -542,6 +542,13 @@ main.settings-main .card:last-child {
     flex: 1;
 }
 
+/* The rename editor is a real form (Enter submits natively), but the
+   row's flex layout expects .pick-label and .row-actions as direct
+   children — keep the wrapper out of layout. */
+.rename-form {
+    display: contents;
+}
+
 .pick-label input.rename {
     flex: 1;
     min-width: 0;

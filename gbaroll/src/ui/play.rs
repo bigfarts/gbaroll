@@ -160,6 +160,36 @@ pub fn PlayScreen() -> Element {
     // The save being renamed, and the stem typed so far.
     let mut rename_target = use_signal(|| Option::<String>::None);
     let mut rename_value = use_signal(String::new);
+    // Commit the rename editor: `save` gets the typed stem, keeping
+    // its extension. A blank stem is a no-op (the submit button is
+    // disabled, which also blocks Enter's implicit submission).
+    let commit_rename = move |save: String| {
+        let stem = rename_value.read().trim().to_string();
+        if stem.is_empty() {
+            return;
+        }
+        let to = format!("{stem}.{}", ext_of(&save));
+        let storage = storage_res.read().clone().flatten();
+        spawn(async move {
+            let Some(storage) = storage else { return };
+            match storage::rename(storage.saves(), &save, &to).await {
+                Ok(()) => {
+                    // The picker follows the rename.
+                    if selected_save.read().as_deref() == Some(save.as_str()) {
+                        selected_save.set(Some(to));
+                    }
+                }
+                Err(e) => flash(
+                    save_flash,
+                    format!("couldn't rename {save}: {e}"),
+                    false,
+                    5000,
+                ),
+            }
+            rename_target.set(None);
+            *library_rev.write() += 1;
+        });
+    };
 
     let (scanned, roms, saves) = match library.read().as_ref() {
         Some(Some((lib, saves))) => (true, lib.roms.clone(), saves.clone()),
@@ -422,65 +452,49 @@ pub fn PlayScreen() -> Element {
                     div {
                         class: if selected_save.read().as_deref() == Some(save.as_str()) { "pick-row selected" } else { "pick-row" },
                         if rename_target.read().as_deref() == Some(save.as_str()) {
-                            div { class: "pick-label",
-                                // Renaming: edit the stem, keep the extension.
-                                input {
-                                    class: "rename",
-                                    value: "{rename_value}",
-                                    spellcheck: "false",
-                                    autocomplete: "off",
-                                    onclick: move |evt: MouseEvent| evt.stop_propagation(),
-                                    oninput: move |evt: FormEvent| rename_value.set(evt.value()),
+                            form {
+                                class: "rename-form",
+                                // Enter and the Rename button both land here.
+                                onsubmit: {
+                                    let save = save.clone();
+                                    move |evt: FormEvent| {
+                                        evt.prevent_default();
+                                        commit_rename(save.clone());
+                                    }
+                                },
+                                div { class: "pick-label",
+                                    // Renaming: edit the stem, keep the extension.
+                                    input {
+                                        class: "rename",
+                                        value: "{rename_value}",
+                                        spellcheck: "false",
+                                        autocomplete: "off",
+                                        // The editor opens focused.
+                                        onmounted: move |evt| async move {
+                                            let _ = evt.set_focus(true).await;
+                                        },
+                                        onclick: move |evt: MouseEvent| evt.stop_propagation(),
+                                        oninput: move |evt: FormEvent| rename_value.set(evt.value()),
+                                    }
+                                    code { {format!(".{}", ext_of(&save))} }
                                 }
-                                code { {format!(".{}", ext_of(&save))} }
-                            }
-                            div { class: "row-actions",
-                                button {
-                                    class: "btn primary",
-                                    disabled: rename_value.read().trim().is_empty(),
-                                    onclick: {
-                                        let save = save.clone();
-                                        move |evt: MouseEvent| {
+                                div { class: "row-actions",
+                                    button {
+                                        class: "btn primary",
+                                        r#type: "submit",
+                                        disabled: rename_value.read().trim().is_empty(),
+                                        onclick: move |evt: MouseEvent| evt.stop_propagation(),
+                                        "Rename"
+                                    }
+                                    button {
+                                        class: "btn",
+                                        r#type: "button",
+                                        onclick: move |evt: MouseEvent| {
                                             evt.stop_propagation();
-                                            let storage = storage_res.read().clone().flatten();
-                                            let save = save.clone();
-                                            let to = format!(
-                                                "{}.{}",
-                                                rename_value.read().trim(),
-                                                ext_of(&save)
-                                            );
-                                            async move {
-                                                let Some(storage) = storage else { return };
-                                                match storage::rename(storage.saves(), &save, &to).await {
-                                                    Ok(()) => {
-                                                        // The picker follows the rename.
-                                                        if selected_save.read().as_deref()
-                                                            == Some(save.as_str())
-                                                        {
-                                                            selected_save.set(Some(to));
-                                                        }
-                                                    }
-                                                    Err(e) => flash(
-                                                        save_flash,
-                                                        format!("couldn't rename {save}: {e}"),
-                                                        false,
-                                                        5000,
-                                                    ),
-                                                }
-                                                rename_target.set(None);
-                                                *library_rev.write() += 1;
-                                            }
-                                        }
-                                    },
-                                    "Rename"
-                                }
-                                button {
-                                    class: "btn",
-                                    onclick: move |evt: MouseEvent| {
-                                        evt.stop_propagation();
-                                        rename_target.set(None);
-                                    },
-                                    "Cancel"
+                                            rename_target.set(None);
+                                        },
+                                        "Cancel"
+                                    }
                                 }
                             }
                         } else if pending_save_delete.read().as_deref() == Some(save.as_str()) {

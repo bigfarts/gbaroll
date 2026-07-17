@@ -461,7 +461,21 @@ pub fn CableBody() -> Element {
                 }
                 p { class: "sub", "You'll get a code to share with the other players." }
                 div { class: "or-divider", "or" }
-                div { class: "join-row",
+                form { class: "join-row",
+                    // Enter and the Join button both land here; an
+                    // incomplete code is a no-op (the submit button is
+                    // disabled, which also blocks Enter's implicit
+                    // submission).
+                    onsubmit: {
+                        let ctx = ctx.clone();
+                        move |evt: FormEvent| {
+                            evt.prevent_default();
+                            let code = code_entry.read().clone();
+                            if code.len() == gbaroll_signaling::ROOM_CODE_LEN {
+                                start_lobby(&ctx, LobbyMode::Join { code });
+                            }
+                        }
+                    },
                     input {
                         r#type: "text",
                         placeholder: "6-character code",
@@ -472,29 +486,11 @@ pub fn CableBody() -> Element {
                         oninput: move |evt: FormEvent| {
                             code_entry.set(sanitize_room_code(&evt.value()));
                         },
-                        // Enter submits once the code is complete.
-                        onkeydown: {
-                            let ctx = ctx.clone();
-                            move |evt: KeyboardEvent| {
-                                let code = code_entry.read().clone();
-                                if evt.key().to_string() == "Enter"
-                                    && code.len() == gbaroll_signaling::ROOM_CODE_LEN
-                                {
-                                    start_lobby(&ctx, LobbyMode::Join { code });
-                                }
-                            }
-                        },
                     }
                     button {
                         class: "btn primary",
+                        r#type: "submit",
                         disabled: code_entry.read().len() != gbaroll_signaling::ROOM_CODE_LEN,
-                        onclick: {
-                            let ctx = ctx.clone();
-                            move |_| {
-                                let code = code_entry.read().clone();
-                                start_lobby(&ctx, LobbyMode::Join { code });
-                            }
-                        },
                         "Join"
                     }
                 }
