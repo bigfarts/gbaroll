@@ -41,8 +41,12 @@ jobs:
       # --force: the rust-cache restores ~/.cargo's install manifest
       # but not the binaries, so binstall would otherwise skip the
       # install as "already done" on every cache hit.
+      # --locked: when no prebuilt binary is found, binstall falls back
+      # to cargo install, which resolves deps fresh — new releases of
+      # transitive deps can then break the build (git2 0.21 vs
+      # auth-git2). The published Cargo.lock is known to compile.
       - name: Install dioxus-cli
-        run: cargo binstall --no-confirm --force dioxus-cli@0.7.9
+        run: cargo binstall --no-confirm --force --locked dioxus-cli@0.7.9
 
       - name: Build the web bundle
         run: dx build --package gbaroll --release
