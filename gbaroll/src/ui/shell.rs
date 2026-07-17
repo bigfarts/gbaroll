@@ -29,6 +29,26 @@ static ICON_512: Asset =
     asset!("/assets/icon-512.png", AssetOptions::builder().with_hash_suffix(false));
 /// The in-app logo (the topbar). Hashed like any other asset.
 const LOGO: Asset = asset!("/assets/icon.svg");
+/// The brand fonts, named by the stylesheet's @font-face urls —
+/// unhashed and `#[used]` for the same reason as the manifest icons.
+#[used]
+static FONT_NEUE: Asset = asset!(
+    "/assets/ComicNeue-Regular.woff2",
+    AssetOptions::builder().with_hash_suffix(false)
+);
+#[used]
+static FONT_NEUE_BOLD: Asset = asset!(
+    "/assets/ComicNeue-Bold.woff2",
+    AssetOptions::builder().with_hash_suffix(false)
+);
+#[used]
+static FONT_MONO: Asset =
+    asset!("/assets/ComicMono.ttf", AssetOptions::builder().with_hash_suffix(false));
+#[used]
+static FONT_MONO_BOLD: Asset = asset!(
+    "/assets/ComicMono-Bold.ttf",
+    AssetOptions::builder().with_hash_suffix(false)
+);
 
 #[component]
 pub fn App() -> Element {
