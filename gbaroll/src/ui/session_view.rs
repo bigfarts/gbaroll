@@ -57,44 +57,8 @@ pub fn SessionView() -> Element {
             // session's SRAM write-back probably created (or updated)
             // a save — rescan so it shows immediately.
             *library_rev.write() += 1;
-            // Give the browser chrome back too.
-            if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-                if doc.fullscreen_element().is_some() {
-                    doc.exit_fullscreen();
-                }
-            }
         });
     }
-
-    // Touch screens: the game is the app — go fullscreen for the
-    // session. Best-effort: the browser honors this only near a user
-    // gesture (the Play tap qualifies; a netplay auto-start may not).
-    use_effect(move || {
-        let is_touch = web_sys::window()
-            .and_then(|w| w.match_media("(pointer: coarse)").ok().flatten())
-            .map(|m| m.matches())
-            .unwrap_or(false);
-        if !is_touch {
-            return;
-        }
-        let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
-            return;
-        };
-        if doc.fullscreen_element().is_some() {
-            return;
-        }
-        let Some(el) = doc.get_element_by_id("session-root") else {
-            return;
-        };
-        if el.request_fullscreen().is_err() {
-            // Older iOS only speaks the webkit-prefixed form.
-            if let Ok(f) = js_sys::Reflect::get(&el, &"webkitRequestFullscreen".into()) {
-                if let Some(f) = f.dyn_ref::<js_sys::Function>() {
-                    let _ = f.call0(&el);
-                }
-            }
-        }
-    });
 
     // Reactive inputs: per-frame stats, structural session changes, and
     // the Escape-toggled menu.
@@ -127,7 +91,7 @@ pub fn SessionView() -> Element {
 
     rsx! {
         document::Title { "{title} — gbaroll" }
-        div { id: "session-root", class: "session",
+        div { class: "session",
             div { class: "stage",
                 // Backing store per scaling mode: native 240x160 for
                 // integer mode (pixelated CSS upscale stays square), a
