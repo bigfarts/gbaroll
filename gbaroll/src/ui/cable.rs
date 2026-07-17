@@ -390,16 +390,9 @@ pub fn CableBody() -> Element {
                                 }
                             }
                         } else {
-                            div { class: "roster-row empty",
+                            div { class: "roster-row open",
                                 span { class: "dot hollow" }
-                                // The filled row's two-line shape, with the
-                                // game line blank: the row keeps a seat's
-                                // height and the dot sits where a seat's
-                                // dot would.
-                                div { class: "roster-name",
-                                    span { "Open slot" }
-                                    span { class: "game-title", "\u{a0}" }
-                                }
+                                span { "Open slot" }
                             }
                         }
                     }

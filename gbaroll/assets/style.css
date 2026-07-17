@@ -1199,8 +1199,10 @@ main.settings-main .card:last-child {
     flex: none;
 }
 
-/* An unfilled seat: dashed outline, hollow dot, quiet text. */
-.roster-row.empty {
+/* An unfilled seat: dashed outline, hollow dot, quiet text. Named
+   `open`, not `empty` — the generic .empty empty-state (a centered
+   column) must not restyle a roster row. */
+.roster-row.open {
     background: transparent;
     border-style: dashed;
     color: var(--text-dim);
