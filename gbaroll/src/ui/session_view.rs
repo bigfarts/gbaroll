@@ -145,11 +145,10 @@ pub fn SessionView() -> Element {
                 if end.is_none() && running {
                     overlay::SessionOverlay {}
                     // Coarse-pointer screens get on-screen controls (CSS
-                    // decides; it renders inert elsewhere). They rest
-                    // while the menu is down.
-                    if !menu_open {
-                        touch::TouchControls {}
-                    }
+                    // decides; it renders inert elsewhere). They stay put
+                    // under an open card — the backdrop (z 7) covers them,
+                    // so a touch there dismisses the card instead.
+                    touch::TouchControls {}
                 }
                 // Pause only happens transiently (the lobby freezes the
                 // machine for its capture); the badge says why the game

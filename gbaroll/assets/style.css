@@ -661,6 +661,15 @@ main.settings-main .card:last-child {
 
 /* --- the GBA-shaped binding editor ----------------------------------- */
 
+/* A touch screen plays on the on-screen controls (see the touch
+   controls section below) — there's nothing to bind, so the whole
+   card stays out of Settings there. */
+@media (pointer: coarse) {
+    section.input-bindings {
+        display: none;
+    }
+}
+
 /* The console plate, landscape like the machine: shoulders on the top
    corners, d-pad left, screen center, A/B right, Start/Select under
    the screen. Cells hold only the button + a one-line hint, so the

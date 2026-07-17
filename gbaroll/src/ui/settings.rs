@@ -85,7 +85,9 @@ pub fn SettingsScreen() -> Element {
                 }
             }
         }
-        section { class: "card",
+        // Hidden on touch screens (CSS decides): play happens on the
+        // on-screen controls there, so there's nothing to bind.
+        section { class: "card input-bindings",
             h2 { "Input bindings" }
             // The console plate: controls sit where they do on the
             // machine — shoulders up top, d-pad left, A/B right,

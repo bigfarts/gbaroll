@@ -31,8 +31,7 @@ pub fn TouchControls() -> Element {
     // between directions mid-press).
     let dpad_active = use_signal(|| false);
 
-    // Held bits must not outlive the overlay (menu opening, rotation,
-    // session end).
+    // Held bits must not outlive the overlay (rotation, session end).
     {
         let runtime = runtime.clone();
         use_drop(move || runtime.borrow_mut().touch_keys = 0);
