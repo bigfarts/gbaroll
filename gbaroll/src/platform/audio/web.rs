@@ -33,6 +33,41 @@ const MIN_CHUNK_FRAMES: u32 = 128;
 /// can't fetch, and the main wasm-bindgen module can't run there.
 const WORKLET_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gbaroll_worklet.wasm"));
 
+/// 50ms of 8-bit mono silence as a WAV data URI — the iOS ringer
+/// workaround's media element needs real, unmuted media to play.
+const SILENT_WAV: &str = "data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YZABAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA";
+
+/// iOS's ringer switch mutes pages in the default "ambient" audio
+/// session category; games want "playback" (what native games and
+/// video use), which the switch doesn't touch. Where the Audio
+/// Session API exists (iOS >= 16.4) claiming it is one assignment —
+/// done via Reflect since web-sys still gates AudioSession as
+/// unstable. Returns whether the API was present.
+fn claim_playback_audio_session() -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    let navigator: JsValue = window.navigator().into();
+    let Ok(session) = js_sys::Reflect::get(&navigator, &"audioSession".into()) else {
+        return false;
+    };
+    if session.is_undefined() || session.is_null() {
+        return false;
+    }
+    js_sys::Reflect::set(&session, &"type".into(), &"playback".into()).is_ok()
+}
+
+/// Pre-16.4 iOS fallback: an unmuted, looping, genuinely-playing
+/// media element flips the page's audio session to the playback
+/// category, and Web Audio rides along. Must start inside the user
+/// gesture that built the sink.
+fn start_silent_loop() -> Option<web_sys::HtmlAudioElement> {
+    let el = web_sys::HtmlAudioElement::new_with_src(SILENT_WAV).ok()?;
+    el.set_loop(true);
+    let _ = el.play();
+    Some(el)
+}
+
 pub struct WebAudio {
     ctx: web_sys::AudioContext,
     node: web_sys::AudioWorkletNode,
@@ -43,6 +78,9 @@ pub struct WebAudio {
     /// before the report is already counted inside it.
     sent_since_report: Rc<Cell<u32>>,
     scratch: Vec<[i16; super::NUM_CHANNELS]>,
+    /// The pre-16.4 iOS ringer workaround, kept playing for the
+    /// sink's lifetime (see [`start_silent_loop`]).
+    silent_loop: Option<web_sys::HtmlAudioElement>,
     /// Keeps the report closure alive for the node's lifetime.
     _onmessage: Closure<dyn FnMut(web_sys::MessageEvent)>,
 }
@@ -55,6 +93,15 @@ impl WebAudio {
         worklet_url: &str,
         on_report: impl Fn() + 'static,
     ) -> Result<WebAudio, JsValue> {
+        // The ringer switch must not mute the game: claim the
+        // playback session category, by API where present, by the
+        // media-element trick on older iOS.
+        let silent_loop = if !claim_playback_audio_session() && crate::web::is_ios() {
+            start_silent_loop()
+        } else {
+            None
+        };
+
         let opts = web_sys::AudioContextOptions::new();
         opts.set_sample_rate(48_000.0);
         let ctx = web_sys::AudioContext::new_with_context_options(&opts)?;
@@ -106,6 +153,7 @@ impl WebAudio {
             reported_queued,
             sent_since_report,
             scratch: Vec::new(),
+            silent_loop,
             _onmessage: onmessage,
         })
     }
@@ -160,16 +208,28 @@ impl WebAudio {
     }
 
     /// The context auto-suspends without a gesture and on some
-    /// backgrounding paths; poke it whenever we're pumping.
+    /// backgrounding paths; poke it whenever we're pumping. The same
+    /// paths pause the ringer workaround's loop, so it gets the same
+    /// poke.
     pub fn resume_if_suspended(&self) {
         if self.ctx.state() == web_sys::AudioContextState::Suspended {
             let _ = self.ctx.resume();
+        }
+        if let Some(el) = &self.silent_loop {
+            if el.paused() {
+                let _ = el.play();
+            }
         }
     }
 }
 
 impl Drop for WebAudio {
     fn drop(&mut self) {
+        if let Some(el) = &self.silent_loop {
+            let _ = el.pause();
+            // Detach the buffer so the element is collectable.
+            el.set_src("");
+        }
         let _ = self.ctx.close();
     }
 }
