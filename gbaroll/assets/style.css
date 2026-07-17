@@ -72,7 +72,7 @@ body {
 body {
     background: var(--bg);
     color: var(--text);
-    font: 14px/1.45 "Comic Sans MS", "Comic Sans", "Comic Neue", cursive;
+    font: 14px/1.45 "Comic Sans MS", "Comic Sans", "Comic Neue", sans-serif;
     -webkit-font-smoothing: antialiased;
     /* Chrome, not a document: labels don't select, controls don't grow
        text cursors or tap flashes. Fields opt back in below. */
