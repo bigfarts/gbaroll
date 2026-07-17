@@ -1636,8 +1636,8 @@ main.settings-main .card:last-child {
         padding: 0 10px;
     }
 
-    /* The segmented control is identity enough. */
-    .brand {
+    /* The mark stays; the wordmark is what there's no room for. */
+    .brand h1 {
         display: none;
     }
 
