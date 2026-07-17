@@ -48,14 +48,55 @@ pub async fn boot(
     runtime.borrow_mut().start_local(rom, save, save_file)
 }
 
+/// Whether this is iOS/iPadOS WebKit. iPadOS 13+ masquerades as macOS,
+/// so the touch-point count disambiguates.
+pub fn is_ios() -> bool {
+    let Some(nav) = web_sys::window().map(|w| w.navigator()) else {
+        return false;
+    };
+    let ua = nav.user_agent().unwrap_or_default();
+    ["iPhone", "iPad", "iPod"].iter().any(|d| ua.contains(d))
+        || (ua.contains("Macintosh") && nav.max_touch_points() > 1)
+}
+
+/// Clear a file input after handling its pick, so picking the very same
+/// file again fires `change` again (an unchanged value doesn't, which
+/// reads as a dead importer on retries and re-imports).
+pub fn reset_file_input(evt: &dioxus::events::FormEvent) {
+    use dioxus::web::WebEventExt;
+    if let Some(input) = evt
+        .try_as_web_event()
+        .and_then(|e| e.target())
+        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+    {
+        input.set_value("");
+    }
+}
+
+/// Read a picked file's bytes via the File's own `arrayBuffer()`.
+/// Dioxus's `FileData::read_bytes` drives a FileReader without hooking
+/// `onerror`, so an unreadable file — iOS pickers produce these for
+/// not-yet-downloaded iCloud items — hangs the import forever instead
+/// of failing; the promise path rejects properly.
+async fn read_file(file: &dioxus::html::FileData) -> anyhow::Result<Vec<u8>> {
+    use dioxus::web::WebFileExt;
+    let web_file = file
+        .get_web_file()
+        .ok_or_else(|| anyhow::anyhow!("no backing File"))?;
+    let buf = wasm_bindgen_futures::JsFuture::from(web_file.array_buffer())
+        .await
+        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    Ok(js_sys::Uint8Array::new(&buf).to_vec())
+}
+
 /// Import picked files into OPFS, routed by extension (ROMs vs saves).
 /// Returns (roms, saves, skipped) counts.
 pub async fn import_files(storage: &Storage, files: Vec<dioxus::html::FileData>) -> (u32, u32, u32) {
     let (mut roms, mut saves, mut skipped) = (0, 0, 0);
     for file in files {
         let name = file.name();
-        let bytes = match file.read_bytes().await {
-            Ok(b) => b.to_vec(),
+        let bytes = match read_file(&file).await {
+            Ok(b) => b,
             Err(e) => {
                 log::error!("couldn't read {name}: {e:?}");
                 skipped += 1;
