@@ -21,7 +21,6 @@ pub struct LobbyUi {
     pub code: Option<String>,
     pub players: Vec<PlayerInfo>,
     pub my_idx: usize,
-    pub my_ready: bool,
     pub starting: bool,
     pub status: Option<String>,
 }
@@ -121,9 +120,6 @@ fn drain(ctx: Ctx, handle: lobby::LobbyHandle) {
                 }
                 LobbyEvent::Roster { players, your_idx } => {
                     if let Some(ui) = LOBBY_UI.write().as_mut() {
-                        // Occupancy changes reset ready state server-side;
-                        // mirror what the server reports for us.
-                        ui.my_ready = players.get(your_idx).map(|p| p.ready).unwrap_or(false);
                         ui.players = players;
                         ui.my_idx = your_idx;
                         if !ui.starting {
@@ -288,33 +284,44 @@ pub fn CableBody() -> Element {
                 if let Some(code) = &ui.code {
                     super::telemetry::RoomCode { code: code.clone() }
                 } else {
-                    p { class: "sub", "Connecting to the server…" }
+                    // The code button's exact footprint, so the panel
+                    // doesn't reflow when the connection lands.
+                    button {
+                        class: "btn room-code-btn",
+                        disabled: true,
+                        span { class: "room-code-label",
+                            span { class: "sub", "LINK CODE" }
+                            code { class: "room-code", "······" }
+                        }
+                        "Connecting…"
+                    }
                 }
+                // Always four seats — a real multi-cable chain — with the
+                // unfilled ones drawn as open slots.
                 div { class: "roster",
-                    for (idx, player) in ui.players.iter().enumerate() {
-                        div { class: "roster-row",
-                            span {
-                                class: if player.ready { "roster-ready ready" } else { "roster-ready" },
-                                if player.ready {
-                                    icons::Check {}
-                                } else {
-                                    "·"
+                    for idx in 0..gbaroll_signaling::MAX_PLAYERS {
+                        if let Some(player) = ui.players.get(idx) {
+                            div { class: "roster-row",
+                                // The seat's identity colour — the same one
+                                // its ping trace uses once the cable is in.
+                                span {
+                                    class: "dot",
+                                    style: "background: {super::telemetry::PEER_COLORS[idx % super::telemetry::PEER_COLORS.len()]}",
+                                }
+                                div { class: "roster-name",
+                                    span { "{player.nick}" }
+                                    span { class: "game-title", "{roster_names[idx]}" }
+                                }
+                                if idx == ui.my_idx {
+                                    span { class: "you-badge", "you" }
+                                } else if !have_crc.contains(&player.rom_crc32) {
+                                    span { class: "link-notice", "missing this ROM" }
                                 }
                             }
-                            // The seat's identity colour — the same one
-                            // its ping trace uses once the cable is in.
-                            span {
-                                class: "dot",
-                                style: "background: {super::telemetry::PEER_COLORS[idx % super::telemetry::PEER_COLORS.len()]}",
-                            }
-                            div { class: "roster-name",
-                                span { "{player.nick}" }
-                                span { class: "game-title", "{roster_names[idx]}" }
-                            }
-                            if idx == ui.my_idx {
-                                span { class: "you-badge", "you" }
-                            } else if !have_crc.contains(&player.rom_crc32) {
-                                span { class: "link-notice", "missing this ROM" }
+                        } else {
+                            div { class: "roster-row empty",
+                                span { class: "dot hollow" }
+                                span { class: "sub", "Open slot" }
                             }
                         }
                     }
@@ -326,11 +333,11 @@ pub fn CableBody() -> Element {
                     {
                         let connected = ui.code.is_some();
                         ui.status.clone().unwrap_or_else(|| {
-                            if connected && ui.my_idx == 0 && !ui.starting {
-                                if ui.players.len() < 2 {
+                            if connected && !ui.starting {
+                                if ui.my_idx != 0 {
+                                    "Waiting for the host to start.".to_string()
+                                } else if ui.players.len() < 2 {
                                     "Waiting for players to join.".to_string()
-                                } else if !ui.players.iter().all(|p| p.ready) {
-                                    "Waiting for everyone to ready up.".to_string()
                                 } else {
                                     String::new()
                                 }
@@ -342,17 +349,14 @@ pub fn CableBody() -> Element {
                 }
                 div { class: "menu-actions",
                     if ui.my_idx == 0 {
-                        // The host's seat is always ready; they start the
-                        // room once it's full enough and everyone else is
-                        // ready. Until then the button is simply gray —
-                        // including while the server connection is still
-                        // coming up.
+                        // The host starts the room once anyone else is in.
+                        // Until then the button is simply gray — including
+                        // while the server connection is still coming up.
                         button {
                             class: "btn primary",
                             disabled: ui.code.is_none()
                                 || ui.starting
-                                || ui.players.len() < 2
-                                || !ui.players.iter().all(|p| p.ready),
+                                || ui.players.len() < 2,
                             onclick: move |_| {
                                 if let Some(ui) = LOBBY_UI.write().as_mut() {
                                     ui.starting = true;
@@ -361,24 +365,6 @@ pub fn CableBody() -> Element {
                                 send_cmd(LobbyCommand::Start);
                             },
                             "Start"
-                        }
-                    } else {
-                        button {
-                            class: if ui.my_ready { "btn ready-toggle" } else { "btn primary ready-toggle" },
-                            disabled: ui.code.is_none()
-                                || ui.starting
-                                || ui.players.iter().any(|p| !have_crc.contains(&p.rom_crc32)),
-                            onclick: {
-                                let ready = !ui.my_ready;
-                                move |_| {
-                                    if let Some(ui) = LOBBY_UI.write().as_mut() {
-                                        ui.my_ready = ready;
-                                        ui.status = None;
-                                    }
-                                    send_cmd(LobbyCommand::SetReady { ready });
-                                }
-                            },
-                            if ui.my_ready { "Unready" } else { "Ready up" }
                         }
                     }
                     button {

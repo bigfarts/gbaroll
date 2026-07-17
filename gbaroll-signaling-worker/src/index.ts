@@ -260,8 +260,8 @@ export class Rooms extends DurableObject<Env> {
       this.sendError(ws, ErrorKind.NOT_HOST, "only the host can start");
       return;
     }
-    if (room.players.length < 2 || !room.players.slice(1).every((p) => p.ready)) {
-      this.sendError(ws, ErrorKind.NOT_EVERYONE_READY, "need 2+ players, all ready");
+    if (room.players.length < 2) {
+      this.sendError(ws, ErrorKind.NOT_EVERYONE_READY, "need 2+ players");
       return;
     }
     // Stamp every member's socket with the relay routing; the room

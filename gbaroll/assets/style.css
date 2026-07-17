@@ -471,6 +471,13 @@ main.settings-main .card:last-child {
     /* Uniform across the normal, renaming, and confirm-delete states —
        swapping a row's controls must not reflow the list. */
     min-height: 38px;
+    /* The containing block for the hidden pick-radio. Without this the
+       absolutely-positioned radio escapes the scrolling list (its
+       containing block becomes the document): it stops scrolling with
+       its row, piles scrollable overflow onto the page, and clicking a
+       row low in a scrolled list focus-scrolls the document — which
+       `overflow: hidden` gives the user no way to undo. */
+    position: relative;
 }
 
 .pick-row:hover {
@@ -557,26 +564,30 @@ main.settings-main .card:last-child {
     padding-right: 10px;
 }
 
+/* One line, constant row height — the two panes must mirror each
+   other. The name ellipsizes; the meta keeps its natural width at the
+   right edge (and hides on small screens, see below). */
 .rom-name {
     flex: 1;
     min-width: 0;
     display: flex;
-    flex-direction: column;
-    gap: 1px;
+    align-items: baseline;
+    gap: 10px;
 }
 
 .rom-name .game {
+    flex: 1;
+    min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .rom-meta {
+    flex: none;
     font-size: 11px;
     color: var(--text-dim);
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
 }
 
 .rom-meta code {
@@ -822,18 +833,26 @@ main.settings-main .card:last-child {
 .cable-overlay {
     position: absolute;
     top: 12px;
-    right: 12px;
+    left: 50%;
+    transform: translateX(-50%);
     display: flex;
     flex-direction: column;
-    align-items: flex-end;
+    align-items: center;
+    gap: 8px;
     /* Above the touch controls (6): the open cable card must cover
        them, not fight them for touches. */
     z-index: 7;
 }
 
+/* The menu + cable chips, paired at the top center on every screen. */
+.chip-row {
+    display: flex;
+    gap: 8px;
+}
+
 /* The one chip styling, desktop and touch alike: a quiet pill wearing
-   the touch controls' numbers (its label hides on touch, where the
-   icon rides next to the menu pill). */
+   the touch controls' numbers (labels hide on touch, where the icons
+   are label enough). */
 .btn.status-chip {
     display: inline-flex;
     align-items: center;
@@ -883,6 +902,18 @@ main.settings-main .card:last-child {
     flex: none;
 }
 
+/* An unfilled seat: dashed outline, hollow dot, quiet text. */
+.roster-row.empty {
+    background: transparent;
+    border-style: dashed;
+    color: var(--text-dim);
+}
+
+.dot.hollow {
+    background: transparent;
+    border: 1px dashed var(--text-dim);
+}
+
 .ping-peer .nick {
     flex: 1;
     min-width: 0;
@@ -909,20 +940,6 @@ main.settings-main .card:last-child {
     border: 1px solid var(--border);
     border-radius: 8px;
     font-size: 13px;
-}
-
-.roster-ready {
-    display: inline-flex;
-    justify-content: center;
-    /* Pinned to the check icon's box so the dot placeholder and the
-       icon occupy identical space — no shift on ready/unready. */
-    width: 16px;
-    flex: none;
-    color: var(--text-dim);
-}
-
-.roster-ready.ready {
-    color: #9ece6a;
 }
 
 .roster-name {
@@ -1139,12 +1156,6 @@ main.settings-main .card:last-child {
     margin: 0;
 }
 
-/* "Ready up" and "Unready" differ in width; the button doesn't. */
-.btn.ready-toggle {
-    min-width: 96px;
-    justify-content: center;
-}
-
 /* --- touch controls ---------------------------------------------------- */
 
 /* On any touch screen the cable chip's icon is label enough. */
@@ -1290,21 +1301,9 @@ main.settings-main .card:last-child {
         bottom: 12px;
     }
 
-    .tc-menu {
-        left: 50%;
-        transform: translateX(calc(-100% - 6px));
-        top: 6px;
-        font-size: 13px;
-    }
-
-    /* The cable chip pairs with the menu pill at the top center (its
-       expanded card drops from the same spot) and wears the same look. */
+    /* The chip row keeps its top-center spot, just tighter. */
     .cable-overlay {
         top: 6px;
-        right: auto;
-        left: 50%;
-        transform: translateX(6px);
-        align-items: flex-start;
     }
 
     /* The pause badge ducks under the L shoulder. */
@@ -1318,7 +1317,6 @@ main.settings-main .card:last-child {
     .tele-card {
         width: min(320px, calc(100vw - 20px));
         max-height: calc(100dvh - 42px);
-        transform: translateX(calc(-50% - 6px));
     }
 
     .tele-card .spark-row canvas {
@@ -1371,6 +1369,11 @@ main.settings-main .card:last-child {
 
     /* The segmented control is identity enough. */
     .brand {
+        display: none;
+    }
+
+    /* No room for code/crc/size beside the title; the name wins. */
+    .rom-meta {
         display: none;
     }
 

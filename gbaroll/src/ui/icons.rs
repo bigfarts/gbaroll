@@ -301,6 +301,17 @@ pub fn SignalLow() -> Element {
 }
 
 #[component]
+pub fn Menu() -> Element {
+    rsx! {
+        Lucide {
+            path { d: "M4 6h16" }
+            path { d: "M4 12h16" }
+            path { d: "M4 18h16" }
+        }
+    }
+}
+
+#[component]
 pub fn ChevronUp() -> Element {
     rsx! {
         Lucide { path { d: "m18 15-6-6-6 6" } }

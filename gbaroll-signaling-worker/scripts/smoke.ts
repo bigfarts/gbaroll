@@ -127,6 +127,11 @@ assert(/^[2-9A-HJKMNP-Z]{6}$/.test(code), `room code well-formed (${code})`);
 let roster = await a.expect("roster");
 assert(roster.players.length === 1 && roster.yourIdx === 0, "host alone in the roster");
 
+// --- premature start: a room can't start with a single player ---
+a.send(clientStart());
+const tooFew = await a.expect("error");
+assert(tooFew.kind === ErrorKind.NOT_EVERYONE_READY, "start blocked with fewer than 2 players");
+
 // --- join: wrong code, then right code (lowercased: join normalizes) ---
 const b = await Client.connect(URL);
 await b.expect("hello");
@@ -140,16 +145,13 @@ assert(roster.players.length === 2 && roster.yourIdx === 1, "joiner sees both, i
 roster = await a.expect("roster");
 assert(roster.players.length === 2 && roster.yourIdx === 0, "host sees both, idx 0");
 
-// --- premature start, ready-up, start ---
-a.send(clientStart());
-const notReady = await a.expect("error");
-assert(notReady.kind === ErrorKind.NOT_EVERYONE_READY, "start blocked until everyone is ready");
+// --- only the host starts; readying is legacy but still mirrored ---
 b.send(clientStart());
 const notHost = await b.expect("error");
 assert(notHost.kind === ErrorKind.NOT_HOST, "non-host can't start");
 b.send(clientSetReady(true));
 roster = await a.expect("roster");
-assert(roster.players[1].ready, "host sees the ready flag");
+assert(roster.players[1].ready, "host still sees the legacy ready flag");
 await b.expect("roster");
 a.send(clientStart());
 const startA = await a.expect("starting");

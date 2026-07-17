@@ -13,7 +13,7 @@ use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
 use super::{cable, icons, use_ctx};
-use crate::runtime::{FRAME_REV, PANEL_OPEN, SESSION_EPOCH};
+use crate::runtime::{FRAME_REV, MENU_OPEN, PANEL_OPEN, SESSION_EPOCH};
 use crate::session::{MetricSample, SessionKind, HISTORY_LEN};
 
 // Per-metric vertical spans (the full height of a sparkline).
@@ -353,7 +353,7 @@ pub fn CableOverlay() -> Element {
     let _ = FRAME_REV.read();
     let expanded = *PANEL_OPEN.read();
 
-    let (is_netplay, skew, peers, room_code) = {
+    let (is_netplay, skew, peers) = {
         let rt = ctx.runtime.borrow();
         match rt.descriptor() {
             Some(d) if d.kind == SessionKind::Netplay => {
@@ -369,10 +369,9 @@ pub fn CableOverlay() -> Element {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default(),
-                    d.room_code.clone(),
                 )
             }
-            _ => (false, 0, Vec::new(), None),
+            _ => (false, 0, Vec::new()),
         }
     };
 
@@ -403,11 +402,22 @@ pub fn CableOverlay() -> Element {
 
     rsx! {
         div { class: "cable-overlay",
-            if !expanded {
-                // Collapsed: one status chip.
+            // The chip pair holds the top center on every screen; the
+            // expanded card drops from the same spot. (Touch has no
+            // Escape, so the menu chip is the menu's only way in there.)
+            div { class: "chip-row",
                 button {
                     class: "btn status-chip",
-                    onclick: move |_| *PANEL_OPEN.write() = true,
+                    onclick: move |_| *MENU_OPEN.write() = true,
+                    icons::Menu {}
+                    span { class: "chip-label", "Menu" }
+                }
+                button {
+                    class: "btn status-chip",
+                    onclick: move |_| {
+                        let open = *PANEL_OPEN.peek();
+                        *PANEL_OPEN.write() = !open;
+                    },
                     if is_netplay {
                         // Bars for link quality, colour for the same
                         // reading — no number.
@@ -421,7 +431,8 @@ pub fn CableOverlay() -> Element {
                         span { class: "chip-label", "Link cable" }
                     }
                 }
-            } else if is_netplay {
+            }
+            if expanded && is_netplay {
                 // Expanded, connected: the telemetry card.
                 div { class: "tele-card",
                     div { class: "tele-head",
@@ -431,9 +442,6 @@ pub fn CableOverlay() -> Element {
                             onclick: move |_| *PANEL_OPEN.write() = false,
                             icons::ChevronUp {}
                         }
-                    }
-                    if let Some(code) = &room_code {
-                        RoomCode { code: code.clone() }
                     }
                     TelemetryCards { ctx_key: FRAME_REV() }
                     // A control, not a metric — visually its own group.
@@ -453,7 +461,7 @@ pub fn CableOverlay() -> Element {
                     }
                     p { class: "hint", "Your local game keeps running after disconnecting." }
                 }
-            } else {
+            } else if expanded {
                 // Expanded, offline/lobby: room setup and the roster.
                 div { class: "tele-card",
                     div { class: "tele-head",

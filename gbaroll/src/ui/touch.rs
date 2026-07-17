@@ -2,16 +2,15 @@
 //! screens (see the `.touch-controls` CSS; the session view is always
 //! landscape there, rotated when the device is upright): a slide-aware
 //! d-pad on the left, A/B on the right, L/R shoulders in the top
-//! corners, Start/Select at the bottom, and a menu button (touch has
-//! no Escape). Held buttons write mgba joyflag bits straight into
-//! [`Runtime::touch_keys`]; the pump ORs them with the mapped
-//! keyboard/gamepad state.
+//! corners, and Start/Select at the bottom (the menu rides the shared
+//! chip row — see `telemetry::CableOverlay`). Held buttons write mgba
+//! joyflag bits straight into [`Runtime::touch_keys`]; the pump ORs
+//! them with the mapped keyboard/gamepad state.
 
 use dioxus::prelude::*;
 use mgba::input::keys;
 
 use super::use_ctx;
-use crate::runtime::MENU_OPEN;
 
 /// The d-pad face's CSS size. The direction math mirrors it; keep the
 /// two in sync.
@@ -148,11 +147,6 @@ pub fn TouchControls() -> Element {
                     },
                     "{label}"
                 }
-            }
-            div {
-                class: "tc-btn tc-pill tc-menu",
-                onpointerup: move |_| *MENU_OPEN.write() = true,
-                "☰"
             }
         }
     }

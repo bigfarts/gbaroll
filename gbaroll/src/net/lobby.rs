@@ -13,7 +13,6 @@ use crate::net::ws::SignalSocket;
 
 #[derive(Debug)]
 pub enum LobbyCommand {
-    SetReady { ready: bool },
     /// Host only.
     Start,
     /// The local machine's encoded boot payload, captured by the UI in
@@ -29,7 +28,7 @@ pub enum LobbyEvent {
         players: Vec<PlayerInfo>,
         your_idx: usize,
     },
-    /// Non-fatal problem (e.g. "not everyone is ready").
+    /// Non-fatal problem (e.g. "need 2+ players").
     Error(String),
     /// The lobby is dead; the UI should drop it.
     Fatal(String),
@@ -128,9 +127,6 @@ async fn run(
         futures::select! {
             cmd = cmd_rx.next() => {
                 match cmd {
-                    Some(LobbyCommand::SetReady { ready }) => {
-                        send(&socket, &ClientMessage::set_ready(ready))?;
-                    }
                     Some(LobbyCommand::Start) => {
                         send(&socket, &ClientMessage::start())?;
                     }

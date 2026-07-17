@@ -138,6 +138,10 @@ pub struct Runtime {
     /// The saves/ file the running cart persists into, chosen at boot;
     /// survives plug-in/unplug swaps (same cart), cleared on close.
     save_file: Option<String>,
+    /// The saves/ file SRAM last actually persisted into, kept across
+    /// close so the UI can move a "(fresh save)" pick onto the file the
+    /// session created. Taken by [`Self::take_persisted_save`].
+    last_persisted_save: Option<String>,
     /// CRC of the last persisted SRAM, so the autosave skips no-ops.
     saved_crc: Option<u32>,
     last_autosave_ms: f64,
@@ -188,6 +192,7 @@ impl Runtime {
                 crate::session::HISTORY_LEN,
             ),
             save_file: None,
+            last_persisted_save: None,
             saved_crc: None,
             last_autosave_ms: 0.0,
             last_end: None,
@@ -290,9 +295,16 @@ impl Runtime {
             rtc,
         })?;
         self.save_file = save_file;
+        self.last_persisted_save = None;
         self.last_autosave_ms = performance_now();
         self.adopt_session(Session::Local(session));
         Ok(())
+    }
+
+    /// The saves/ file SRAM last persisted into, taken once. Outlives
+    /// the session so the UI can see it after close.
+    pub fn take_persisted_save(&mut self) -> Option<String> {
+        self.last_persisted_save.take()
     }
 
     /// Persist SRAM into the chosen saves/ file (fire-and-forget; OPFS
@@ -303,6 +315,7 @@ impl Runtime {
         else {
             return;
         };
+        self.last_persisted_save = Some(name.clone());
         let crc = crc32fast::hash(&bytes);
         if self.saved_crc == Some(crc) {
             return;

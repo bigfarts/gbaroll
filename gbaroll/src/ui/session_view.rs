@@ -20,6 +20,7 @@ pub fn SessionView() -> Element {
         mut config,
         library,
         mut library_rev,
+        mut selected_save,
         ..
     } = use_ctx();
 
@@ -41,7 +42,17 @@ pub fn SessionView() -> Element {
     {
         let runtime = runtime.clone();
         use_drop(move || {
-            runtime.borrow_mut().detach_canvas();
+            let mut rt = runtime.borrow_mut();
+            rt.detach_canvas();
+            // A "(fresh save)" session that persisted SRAM created a
+            // real saves/ file — move the picker onto it so the next
+            // Play continues it instead of booting fresh again.
+            if selected_save.peek().is_none() {
+                if let Some(name) = rt.take_persisted_save() {
+                    selected_save.set(Some(name));
+                }
+            }
+            drop(rt);
             // Leaving the session lands back on the pickers, and the
             // session's SRAM write-back probably created (or updated)
             // a save — rescan so it shows immediately.
