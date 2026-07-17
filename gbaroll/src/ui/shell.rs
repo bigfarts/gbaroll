@@ -27,8 +27,6 @@ const APPLE_TOUCH_ICON: Asset =
 #[used]
 static ICON_512: Asset =
     asset!("/assets/icon-512.png", AssetOptions::builder().with_hash_suffix(false));
-/// The in-app logo (the topbar). Hashed like any other asset.
-const LOGO: Asset = asset!("/assets/icon.svg");
 /// The brand fonts, named by the stylesheet's @font-face urls —
 /// unhashed and `#[used]` for the same reason as the manifest icons.
 #[used]
@@ -185,7 +183,7 @@ fn Shell() -> Element {
             ondrop: move |evt| evt.prevent_default(),
             header { class: "topbar",
                 div { class: "brand",
-                    img { class: "logo", src: LOGO, alt: "" }
+                    img { class: "logo", src: ICON, alt: "" }
                     h1 { "gbaroll" }
                 }
                 nav { class: "tabs",
