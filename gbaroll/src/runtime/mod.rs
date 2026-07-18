@@ -438,6 +438,27 @@ impl Runtime {
         Ok(())
     }
 
+    /// The console's reset button: reboot the solo machine in place.
+    /// SRAM is the cart's own memory and survives untouched (the OPFS
+    /// autosave keeps covering it); a wireless machine's adapter
+    /// power-cycles with the console, exactly as on hardware. Netplay
+    /// has no reset — one side rebooting isn't an input the link could
+    /// replay — so this is a no-op there.
+    pub fn reset_session(&mut self) {
+        let Some(session) = &self.session else { return };
+        if !matches!(session, Session::Local(_)) {
+            return;
+        }
+        session.link().with_link(|link| {
+            for i in 0..link.num_players() {
+                link.core_mut(i).reset();
+            }
+            // Reinstate the deepened audio buffer and drop anything the
+            // outgoing machine had queued, same as at boot.
+            crate::session::prepare_audio_buffers(link);
+        });
+    }
+
     /// Pull the cable: the netplay session ends on the next tick and
     /// the machine continues solo from the teardown handoff.
     pub fn unplug(&self) {

@@ -1141,11 +1141,18 @@ main.settings-main .card:last-child {
 
 .menu-actions {
     display: flex;
+    /* Nowrap labels + equal thirds: when a squeezed viewport shrinks
+       the card below what three fit in, buttons drop to a second row
+       instead of bleeding out of the card. */
+    flex-wrap: wrap;
     gap: 8px;
 }
 
 .menu-actions .btn {
-    flex: 1;
+    /* Basis auto (not 0): wrapping can only trigger off natural label
+       widths — a zero basis would never wrap, just bleed the nowrap
+       label out of its button. */
+    flex: 1 1 auto;
     justify-content: center;
 }
 
@@ -1360,6 +1367,14 @@ main.settings-main .card:last-child {
     gap: 8px;
     max-height: 70vh;
     overflow-y: auto;
+}
+
+/* The session menu seats three actions in one row (Back / Reset /
+   Quit), which the stats cards' width can't hold without the labels
+   overflowing their buttons. Self-capped so it never outgrows a narrow
+   viewport (this selector outweighs the media queries' width pins). */
+.tele-card.menu-card {
+    width: min(368px, calc(100vw - 20px));
 }
 
 .tele-head {
@@ -1759,6 +1774,12 @@ main.settings-main .card:last-child {
     .tele-card {
         width: min(320px, calc(100dvh - 20px));
         max-height: calc(100dvw - 42px);
+    }
+
+    /* The rotated card's width runs along the physical height, so the
+       menu card's self-cap swaps axes with it. */
+    .tele-card.menu-card {
+        width: min(368px, calc(100dvh - 20px));
     }
 }
 

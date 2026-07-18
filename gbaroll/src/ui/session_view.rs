@@ -152,7 +152,7 @@ pub fn SessionMenuCard() -> Element {
         ..
     } = use_ctx();
 
-    let (title, caption) = {
+    let (title, caption, is_netplay) = {
         let lib = library.read();
         let rt = runtime.borrow();
         let title = rt
@@ -165,11 +165,9 @@ pub fn SessionMenuCard() -> Element {
             })
             .map(|rom| rom.display_name().to_string())
             .unwrap_or_else(|| "Session".to_string());
-        let caption = match rt.descriptor().map(|d| d.kind) {
-            Some(SessionKind::Netplay) => "Netplay",
-            _ => "Playing solo",
-        };
-        (title, caption)
+        let is_netplay = rt.descriptor().map(|d| d.kind) == Some(SessionKind::Netplay);
+        let caption = if is_netplay { "Netplay" } else { "Playing solo" };
+        (title, caption, is_netplay)
     };
 
     let volume_pct = (config.read().volume * 100.0).round() as u32;
@@ -184,7 +182,7 @@ pub fn SessionMenuCard() -> Element {
     };
 
     rsx! {
-        div { class: "tele-card",
+        div { class: "tele-card menu-card",
             div { class: "tele-head",
                 div {
                     h3 { "{title}" }
@@ -215,6 +213,21 @@ pub fn SessionMenuCard() -> Element {
                     class: "btn primary",
                     onclick: move |_| *MENU_OPEN.write() = false,
                     "Back to game"
+                }
+                // The console's reset button — solo only: one side
+                // rebooting isn't an input a netplay link could replay.
+                if !is_netplay {
+                    button {
+                        class: "btn",
+                        onclick: {
+                            let runtime = runtime.clone();
+                            move |_| {
+                                runtime.borrow_mut().reset_session();
+                                *MENU_OPEN.write() = false;
+                            }
+                        },
+                        "Reset"
+                    }
                 }
                 button {
                     class: "btn danger",
