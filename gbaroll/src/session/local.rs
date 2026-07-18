@@ -111,7 +111,13 @@ impl LocalDriver {
 
         {
             let mut link = self.link.lock().unwrap();
-            link.tick(&[joyflags]);
+            // A corrupt link state must end the session with a message,
+            // not panic the app into a frozen tab.
+            if let Err(e) = link.try_tick(&[joyflags]) {
+                drop(link);
+                self.shared.finish(SessionEnd::Error(format!("emulation error: {e}")));
+                return false;
+            }
             if let Some(buf) = link.video_buffer(0) {
                 self.shared.publish_video(buf);
             }
