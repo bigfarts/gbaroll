@@ -26,8 +26,8 @@ use crate::net::protocol::{
 };
 use crate::net::webrtc::{ChannelReceiver, ChannelSender, PeerConnection};
 use crate::session::{
-    prepare_audio_buffers, Handoff, LinkAccess, SessionDescriptor, SessionEnd, SessionKind,
-    SharedSession, EXPECTED_FPS, UNPLUG_QUEUE_LENGTH,
+    prepare_audio_buffers, Handoff, LinkAccess, LinkKind, SessionDescriptor, SessionEnd,
+    SessionKind, SharedSession, EXPECTED_FPS, UNPLUG_QUEUE_LENGTH,
 };
 
 pub struct NetplayArgs {
@@ -156,14 +156,6 @@ pub fn start(args: NetplayArgs) -> anyhow::Result<NetplaySession> {
         });
     }
 
-    let descriptor = SessionDescriptor {
-        kind: SessionKind::Netplay,
-        local_player,
-        nicks: bundle.players.iter().map(|p| p.nick.clone()).collect(),
-        room_code: Some(bundle.room_code.clone()),
-        rom_crc32: Some(bundle.players[local_player].rom_crc32),
-    };
-
     let local_rom = args.roms[local_player].clone();
     // The cable plugs in: every peer rebuilds the identical link from the
     // exchanged captures (the local side included — our own machine loads
@@ -176,11 +168,12 @@ pub fn start(args: NetplayArgs) -> anyhow::Result<NetplaySession> {
         .collect::<Result<Vec<_>, _>>()?;
     // The shared RTC seed is the host's clock, agreed over the peer
     // protocol (it rides player 0's boot payload) rather than taken
-    // from the signaling server.
-    let clock_unix_micros = blobs
-        .first()
-        .map(|b| b.clock_unix_micros)
-        .ok_or_else(|| anyhow::anyhow!("no boot payloads"))?;
+    // from the signaling server — and the link peripheral rides the
+    // same payload: the room creator's machine decides what everyone
+    // builds.
+    let host_blob = blobs.first().ok_or_else(|| anyhow::anyhow!("no boot payloads"))?;
+    let clock_unix_micros = host_blob.clock_unix_micros;
+    let link_kind = host_blob.link;
     let rtc = std::time::UNIX_EPOCH + std::time::Duration::from_micros(clock_unix_micros);
     let sides = args
         .roms
@@ -190,10 +183,20 @@ pub fn start(args: NetplayArgs) -> anyhow::Result<NetplaySession> {
             rom,
             save: blob.save,
             state: blob.state,
+            adapter: blob.adapter,
         })
         .collect::<Vec<_>>();
-    let mut link = Link::from_states(sides, Some(rtc))?;
+    let mut link = Link::from_states(sides, Some(rtc), link_kind.peripheral())?;
     prepare_audio_buffers(&mut link);
+
+    let descriptor = SessionDescriptor {
+        kind: SessionKind::Netplay,
+        local_player,
+        nicks: bundle.players.iter().map(|p| p.nick.clone()).collect(),
+        room_code: Some(bundle.room_code.clone()),
+        rom_crc32: Some(bundle.players[local_player].rom_crc32),
+        link: link_kind,
+    };
 
     let session = Session::new(link, local_player, args.present_delay)?;
     let link_handle = session.link_handle();
@@ -203,6 +206,7 @@ pub fn start(args: NetplayArgs) -> anyhow::Result<NetplaySession> {
         local_player,
         local_rom,
         clock_unix_micros,
+        link_kind,
         session,
         throttler: Throttler::new(),
         event_rx,
@@ -346,6 +350,7 @@ pub struct NetplayDriver {
     local_player: usize,
     local_rom: Vec<u8>,
     clock_unix_micros: u64,
+    link_kind: LinkKind,
     session: Session,
     throttler: Throttler,
     event_rx: mpsc::UnboundedReceiver<NetEvent>,
@@ -546,15 +551,18 @@ impl NetplayDriver {
             let local_player = self.local_player;
             let captured = self.session.with_link(|link| {
                 let state = link.capture_boot_state(local_player)?;
-                Ok::<_, mgba::Error>((state, link.export_save(local_player)))
+                let adapter = link.capture_adapter_state(local_player);
+                Ok::<_, mgba::Error>((state, link.export_save(local_player), adapter))
             });
             match captured {
-                Ok((state, save)) => {
+                Ok((state, save, adapter)) => {
                     *self.shared.handoff.lock().unwrap() = Some(Handoff {
                         rom: std::mem::take(&mut self.local_rom),
                         state,
                         save,
                         rtc_unix_micros: self.clock_unix_micros,
+                        link: self.link_kind,
+                        adapter,
                     });
                 }
                 Err(e) => log::error!("couldn't capture the unplug handoff: {e}"),

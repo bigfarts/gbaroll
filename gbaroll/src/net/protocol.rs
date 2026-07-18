@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Bumped on any incompatible change to the peer protocol.
-pub const NET_VERSION: u32 = 3;
+pub const NET_VERSION: u32 = 4;
 
 /// Rollback horizon: how far ahead of a missing input the streams will
 /// buffer before declaring the peer unrecoverable (~10s at 60fps).
@@ -114,6 +114,15 @@ pub struct BootBlob {
     /// agreement is part of the peer protocol, not the signaling
     /// server's business.
     pub clock_unix_micros: u64,
+    /// The link peripheral this side's session runs. Like the clock,
+    /// every side ships one and only the host's (player 0) decides what
+    /// the link is built from.
+    pub link: crate::session::LinkKind,
+    /// The live wireless adapter session (`Link::capture_adapter_state`),
+    /// so the merged link resumes this side's adapter where it was — the
+    /// players walk into RF range with their sessions intact. `None` on
+    /// a cable-mode capture.
+    pub adapter: Option<Vec<u8>>,
 }
 
 /// Chunk size for the boot exchange, comfortably under the negotiated
@@ -171,6 +180,8 @@ mod tests {
             state: vec![0u8; 400 * 1024],
             save: Some(vec![0xffu8; 32 * 1024]),
             clock_unix_micros: 1_700_000_000_000_000,
+            link: crate::session::LinkKind::Wireless,
+            adapter: Some(vec![0u8; 1200]),
         };
         let encoded = blob.encode().unwrap();
         assert!(encoded.len() < blob.state.len() / 4);

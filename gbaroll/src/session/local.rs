@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use mgba_siolink::{BootSide, Link, LinkOptions, SideOptions};
 
 use crate::session::{
-    prepare_audio_buffers, Handoff, LinkAccess, SessionDescriptor, SessionEnd, SessionKind,
-    SharedSession, EXPECTED_FPS,
+    prepare_audio_buffers, Handoff, LinkAccess, LinkKind, SessionDescriptor, SessionEnd,
+    SessionKind, SharedSession, EXPECTED_FPS,
 };
 
 pub struct LocalArgs {
@@ -20,6 +20,9 @@ pub struct LocalArgs {
     /// The cart clock's boot value. `SystemTime::now()` panics on wasm,
     /// so the host supplies it (from `js_sys::Date::now()`).
     pub rtc: std::time::SystemTime,
+    /// What's on the machine's link port. A wireless machine gets its
+    /// adapter from power-on, so the game's wireless menus work solo.
+    pub link: LinkKind,
 }
 
 /// A booted local session: the driver the runtime pump ticks, plus the
@@ -39,8 +42,9 @@ pub fn start(args: LocalArgs) -> anyhow::Result<LocalSession> {
             save: args.save,
         }],
         rtc: Some(args.rtc),
+        peripheral: args.link.peripheral(),
     })?;
-    Ok(build(link, args.rom_crc32))
+    Ok(build(link, args.rom_crc32, args.link))
 }
 
 /// Continue a solo machine from a netplay teardown: the cable was
@@ -52,13 +56,15 @@ pub fn resume(handoff: Handoff, rom_crc32: u32) -> anyhow::Result<LocalSession> 
             rom: handoff.rom,
             save: handoff.save,
             state: handoff.state,
+            adapter: handoff.adapter,
         }],
         Some(std::time::UNIX_EPOCH + std::time::Duration::from_micros(handoff.rtc_unix_micros)),
+        handoff.link.peripheral(),
     )?;
-    Ok(build(link, rom_crc32))
+    Ok(build(link, rom_crc32, handoff.link))
 }
 
-fn build(mut link: Link, rom_crc32: u32) -> LocalSession {
+fn build(mut link: Link, rom_crc32: u32, link_kind: LinkKind) -> LocalSession {
     prepare_audio_buffers(&mut link);
     let link = Arc::new(Mutex::new(link));
 
@@ -69,6 +75,7 @@ fn build(mut link: Link, rom_crc32: u32) -> LocalSession {
         nicks: vec!["Player 1".to_string()],
         room_code: None,
         rom_crc32: Some(rom_crc32),
+        link: link_kind,
     };
 
     LocalSession {

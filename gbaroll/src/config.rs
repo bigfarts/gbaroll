@@ -35,6 +35,11 @@ pub struct Config {
     pub integer_scaling: bool,
     /// The library's last-picked game (CRC32), restored on load.
     pub last_game: Option<u32>,
+    /// What's on the machine's link port: the multi-cable or the
+    /// wireless adapter. Applied at game launch (the peripheral is
+    /// plugged in before power-on), and announced to peers when this
+    /// side creates a room.
+    pub link: crate::session::LinkKind,
     pub mapping: Mapping,
 }
 
@@ -48,6 +53,7 @@ impl Default for Config {
             volume: 1.0,
             integer_scaling: true,
             last_game: None,
+            link: crate::session::LinkKind::default(),
             mapping: Mapping::default(),
         }
     }

@@ -260,10 +260,18 @@ fn sanitize_room_code(input: &str) -> String {
 /// connected state is `telemetry::TelemetryCard`.)
 #[component]
 pub fn CableCard() -> Element {
+    let ctx = use_ctx();
+    // The session's peripheral was fixed at launch; the card names it.
+    let link = ctx
+        .runtime
+        .borrow()
+        .descriptor()
+        .map(|d| d.link)
+        .unwrap_or_default();
     rsx! {
         div { class: "tele-card",
             div { class: "tele-head",
-                h3 { "Link cable" }
+                h3 { {link.label()} }
                 button {
                     class: "btn ghost icon-btn",
                     onclick: move |_| *PANEL_OPEN.write() = false,
@@ -280,6 +288,13 @@ pub fn CableCard() -> Element {
 pub fn CableBody() -> Element {
     let ctx = use_ctx();
     let mut code_entry = use_signal(String::new);
+    // The running session's peripheral, fixed at launch.
+    let link = ctx
+        .runtime
+        .borrow()
+        .descriptor()
+        .map(|d| d.link)
+        .unwrap_or_default();
 
     let _ = SESSION_EPOCH.read();
     let notice = LINK_NOTICE.read().clone();
@@ -474,17 +489,27 @@ pub fn CableBody() -> Element {
                     }
                 }
             } else {
-                // Offline: host a new room or join a friend's.
+                // Offline: host a new room or join a friend's. The room
+                // runs whatever this machine booted with — the link-port
+                // pick on the Play screen.
                 button {
                     class: "btn primary wide",
                     onclick: {
                         let ctx = ctx.clone();
                         move |_| start_lobby(&ctx, LobbyMode::Create)
                     },
-                    icons::Cable {}
+                    if link == crate::session::LinkKind::Wireless {
+                        icons::Wifi {}
+                    } else {
+                        icons::Cable {}
+                    }
                     "Create a room"
                 }
-                p { class: "sub", "You'll get a code to share with the other players." }
+                p { class: "sub",
+                    "You'll get a code to share with the other players. The room plays over your "
+                    {link.label().to_lowercase()}
+                    "."
+                }
                 div { class: "or-divider", "or" }
                 form { class: "join-row",
                     // Enter and the Join button both land here; an

@@ -86,6 +86,32 @@ impl SessionEnd {
     }
 }
 
+/// Which link peripheral a session's machines are wired to. The room
+/// creator's choice; carried through boot payloads so every peer builds
+/// the same kind of link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum LinkKind {
+    #[default]
+    Cable,
+    Wireless,
+}
+
+impl LinkKind {
+    pub fn peripheral(self) -> mgba_siolink::Peripheral {
+        match self {
+            LinkKind::Cable => mgba_siolink::Peripheral::Cable,
+            LinkKind::Wireless => mgba_siolink::Peripheral::Wireless,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LinkKind::Cable => "Link cable",
+            LinkKind::Wireless => "Wireless adapter",
+        }
+    }
+}
+
 /// The local side's continuation material when a netplay session ends:
 /// everything a solo session needs to keep the machine running (the cable
 /// unplugs, the game goes on).
@@ -98,6 +124,12 @@ pub struct Handoff {
     /// The session's pinned cart clock, carried into the continuation so
     /// RTC games don't see time jump.
     pub rtc_unix_micros: u64,
+    /// The session's link peripheral: the continuation keeps the same
+    /// hardware on the port (a wireless game keeps its adapter).
+    pub link: LinkKind,
+    /// The live adapter session on a wireless link: the continuation
+    /// resumes it, and the departed peers simply fall out of range.
+    pub adapter: Option<Vec<u8>>,
 }
 
 #[allow(dead_code)] // telemetry panel (M5)
@@ -279,6 +311,8 @@ pub struct SessionDescriptor {
     /// The local player's ROM identity, for opening a lobby from a
     /// running session.
     pub rom_crc32: Option<u32>,
+    /// The link peripheral on this session's machines.
+    pub link: LinkKind,
 }
 
 /// Deepen every core's audio buffer past mgba's 2048 default so servo

@@ -289,11 +289,16 @@ impl Runtime {
         let rtc = std::time::SystemTime::UNIX_EPOCH
             + std::time::Duration::from_millis(js_sys::Date::now() as u64);
         self.saved_crc = save.as_deref().map(crc32fast::hash);
+        // The link peripheral is a boot-time property of the machine
+        // (the adapter is plugged in before power-on), so it reads the
+        // persisted setting at launch.
+        let link = crate::config::Config::load().link;
         let session = crate::session::local::start(LocalArgs {
             rom,
             rom_crc32,
             save,
             rtc,
+            link,
         })?;
         self.save_file = save_file;
         self.last_persisted_save = None;
@@ -386,6 +391,7 @@ impl Runtime {
             .shared()
             .paused
             .store(true, std::sync::atomic::Ordering::Release);
+        let link_kind = session.descriptor().link;
         let blob = session
             .link()
             .with_link(|link| {
@@ -393,8 +399,15 @@ impl Runtime {
                 Ok::<_, mgba::Error>(crate::net::protocol::BootBlob {
                     state,
                     save: link.export_save(0),
-                    // Only the host's survives, as the link's RTC seed.
+                    // Only the host's survives, as the link's RTC seed —
+                    // and likewise the host's link peripheral decides
+                    // what everyone builds.
                     clock_unix_micros: (js_sys::Date::now() * 1000.0) as u64,
+                    link: link_kind,
+                    // A wireless machine's live adapter session travels
+                    // too: the merge is players coming into RF range,
+                    // not an adapter power-cycle.
+                    adapter: link.capture_adapter_state(0),
                 })
             })
             .ok_or_else(|| anyhow::anyhow!("machine unavailable"))??;

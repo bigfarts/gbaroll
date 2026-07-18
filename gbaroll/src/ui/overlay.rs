@@ -18,18 +18,20 @@ pub fn SessionOverlay() -> Element {
     let expanded = *PANEL_OPEN.read();
     let menu_open = *MENU_OPEN.read();
 
-    // The cable chip's face: the link-quality glyph while connected.
-    let (is_netplay, skew) = {
+    // The link chip's face: the link-quality glyph while connected,
+    // else the session's peripheral.
+    let (is_netplay, skew, link_kind) = {
         let rt = ctx.runtime.borrow();
+        let link_kind = rt.descriptor().map(|d| d.link).unwrap_or_default();
         match rt.descriptor() {
             Some(d) if d.kind == SessionKind::Netplay => {
                 let skew = rt
                     .shared()
                     .map(|s| s.stats.lock().unwrap().skew)
                     .unwrap_or(0);
-                (true, skew)
+                (true, skew, link_kind)
             }
-            _ => (false, 0),
+            _ => (false, 0, link_kind),
         }
     };
 
@@ -81,10 +83,12 @@ pub fn SessionOverlay() -> Element {
                             style: "color: {telemetry::skew_tone_css(skew)}",
                             {telemetry::signal_icon(skew)}
                         }
+                    } else if link_kind == crate::session::LinkKind::Wireless {
+                        icons::Wifi {}
                     } else {
                         icons::Cable {}
                     }
-                    span { class: "chip-label", "Link cable" }
+                    span { class: "chip-label", {link_kind.label()} }
                 }
             }
             if menu_open {

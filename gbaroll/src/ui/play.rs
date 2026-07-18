@@ -615,9 +615,36 @@ pub fn PlayScreen() -> Element {
                 }
             }
         }
-        // The footer: just Play, right-aligned (grayed out until a game
-        // is picked). Launch failures flash in transiently beside it.
+        // The footer: what's on the link port, then Play (grayed out
+        // until a game is picked). Launch failures flash in between.
         div { class: "launch-bar",
+                // The peripheral is plugged in before power-on, so the
+                // choice lives here, at launch. It also decides what a
+                // room created from this session announces to peers.
+                {
+                    let link = config.read().link;
+                    rsx! {
+                        div { class: "port-pick",
+                            span { class: "port-pick-label", "Link port" }
+                            div { class: "port-seg", role: "group",
+                                button {
+                                    class: if link == crate::session::LinkKind::Cable { "port-seg-btn on" } else { "port-seg-btn" },
+                                    title: "Boot with the multi-cable on the link port",
+                                    onclick: move |_| config.with_mut(|c| c.link = crate::session::LinkKind::Cable),
+                                    icons::Cable {}
+                                    "Cable"
+                                }
+                                button {
+                                    class: if link == crate::session::LinkKind::Wireless { "port-seg-btn on" } else { "port-seg-btn" },
+                                    title: "Boot with the wireless adapter on the link port",
+                                    onclick: move |_| config.with_mut(|c| c.link = crate::session::LinkKind::Wireless),
+                                    icons::Wifi {}
+                                    "Wireless"
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some(f) = launch_flash.read().clone() {
                     FlashText { flash: f }
                 }

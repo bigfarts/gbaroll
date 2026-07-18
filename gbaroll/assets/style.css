@@ -706,6 +706,61 @@ main.settings-main .card:last-child {
     padding: 2px 6px;
 }
 
+/* The link-port picker: a quiet segmented control pinned to the bar's
+   far left — a recessed track holding two segments, so it reads as one
+   setting rather than competing with the Play button at the right. */
+.port-pick {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-right: auto;
+}
+
+.port-pick-label {
+    color: var(--text-dim);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.port-seg {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    background: var(--bg-deep);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+
+.port-seg-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.port-seg-btn:hover {
+    color: var(--text);
+}
+
+.port-seg-btn.on {
+    background: var(--surface-2);
+    border-color: var(--border);
+    color: var(--text);
+    font-weight: 600;
+}
+
+/* The selected segment's glyph carries the accent, like the tab bar. */
+.port-seg-btn.on svg {
+    color: var(--accent);
+}
+
 /* A launch failure flashes in beside the button and truncates. */
 .launch-bar > .flash-ok,
 .launch-bar > .link-notice {
@@ -1707,6 +1762,12 @@ main.settings-main .card:last-child {
     .topbar {
         gap: 8px;
         padding: 0 10px;
+    }
+
+    /* The segments' icons say it; the caption is what there's no room
+       for beside Play. */
+    .port-pick-label {
+        display: none;
     }
 
     /* The mark stays; the wordmark is what there's no room for. */
