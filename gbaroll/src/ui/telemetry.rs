@@ -439,11 +439,13 @@ pub fn TelemetryCard() -> Element {
                 button {
                     class: if tab == TeleTab::Stats { "btn tab active" } else { "btn tab" },
                     onclick: move |_| *TELE_TAB.write() = TeleTab::Stats,
+                    icons::ChartLine {}
                     "Stats"
                 }
                 button {
                     class: if tab == TeleTab::Room { "btn tab active" } else { "btn tab" },
                     onclick: move |_| *TELE_TAB.write() = TeleTab::Room,
+                    icons::Users {}
                     "Room"
                 }
             }

@@ -626,16 +626,16 @@ pub fn PlayScreen() -> Element {
                     rsx! {
                         div { class: "port-pick",
                             span { class: "port-pick-label", "Link port" }
-                            div { class: "port-seg", role: "group",
+                            div { class: "tabs", role: "group",
                                 button {
-                                    class: if link == crate::session::LinkKind::Cable { "port-seg-btn on" } else { "port-seg-btn" },
+                                    class: if link == crate::session::LinkKind::Cable { "btn tab active" } else { "btn tab" },
                                     title: "Boot with the multi-cable on the link port",
                                     onclick: move |_| config.with_mut(|c| c.link = crate::session::LinkKind::Cable),
                                     icons::Cable {}
                                     "Cable"
                                 }
                                 button {
-                                    class: if link == crate::session::LinkKind::Wireless { "port-seg-btn on" } else { "port-seg-btn" },
+                                    class: if link == crate::session::LinkKind::Wireless { "btn tab active" } else { "btn tab" },
                                     title: "Boot with the wireless adapter on the link port",
                                     onclick: move |_| config.with_mut(|c| c.link = crate::session::LinkKind::Wireless),
                                     icons::Wifi {}
