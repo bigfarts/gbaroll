@@ -49,12 +49,12 @@ function unhex(s: string): Uint8Array {
 const CLIENT_FIXTURES: [string, string, ClientMessage][] = [
   [
     "create_room",
-    "0a1a0804120672c3a93aceb118effdb6f50d22084147422d42544d4a",
-    clientCreateRoom("ré:α", 0xdeadbeef, "AGB-BTMJ"),
+    "0a1c0805120672c3a93aceb118effdb6f50d22084147422d42544d4a2801",
+    clientCreateRoom("ré:α", 0xdeadbeef, "AGB-BTMJ", true),
   ],
   [
     "join_room",
-    "1216080412064142324333441a02703220848688082a0154",
+    "1216080512064142324333441a02703220848688082a0154",
     clientJoinRoom("AB2C3D", "p2", 0x01020304, "T"),
   ],
   ["set_ready_true", "1a020801", clientSetReady(true)],
@@ -85,7 +85,7 @@ const SERVER_FIXTURES: [string, string, ServerMessage][] = [
   ["room_joined", "1a080a06414232433344", serverRoomJoined("AB2C3D")],
   [
     "roster",
-    "22260a180a04686f7374100118effdb6f50d22084147422d42544d4a0a080a027032180428031001",
+    "22280a180a04686f7374100118effdb6f50d22084147422d42544d4a0a080a0270321804280310011801",
     serverRoster(
       [
         { nick: "host", ready: true, romCrc32: 0xdeadbeef, romTitle: "AGB-BTMJ", seat: 0 },
@@ -93,6 +93,7 @@ const SERVER_FIXTURES: [string, string, ServerMessage][] = [
         { nick: "p2", ready: false, romCrc32: 4, romTitle: "", seat: 3 },
       ],
       1,
+      true,
     ),
   ],
   [
@@ -108,11 +109,6 @@ const SERVER_FIXTURES: [string, string, ServerMessage][] = [
   ],
   ["signal", "3200", serverSignal(0, new Uint8Array(0))],
   ["peer_left", "3a020802", serverPeerLeft(2)],
-  [
-    "error",
-    "421e0806121a6e65656420322b20706c61796572732c20616c6c207265616479",
-    serverError(ErrorKind.NOT_EVERYONE_READY, "need 2+ players, all ready"),
-  ],
   ["error_kicked", "42020809", serverError(ErrorKind.KICKED, "")],
 ];
 

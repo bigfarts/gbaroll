@@ -4,15 +4,42 @@
 // worker (protobuf-es, via `pnpm gen`) both generate their types from
 // it.
 //
+// A room is a persistent rendezvous — the airwaves the players share
+// (or, on a cable link, the chain their consoles plug into) — not a
+// one-shot lobby. Membership is dynamic: players join and leave at any
+// time, and the room lives until its last member goes. A merge (the
+// Starting broadcast) links the current membership up; members already
+// playing walk out of their current link and into the new one, and the
+// room code keeps working the whole time.
+//
+// When a merge fires depends on the room's peripheral, because the two
+// kinds of hardware genuinely differ:
+//
+//   - *Wireless* rooms merge on their own — RFU is built for dynamic
+//     membership (clients drift in and out of a host's range and the
+//     games handle it), so whenever the room holds 2+ players, every
+//     member reports ready (the "I hold every ROM in this roster" bit —
+//     see SetReady), and the membership differs from the last merge,
+//     the server broadcasts Starting. A friend joins mid-session and is
+//     folded in as soon as everyone re-asserts.
+//
+//   - *Cable* rooms gather first: a cable game enumerates its chain
+//     when its link menu runs and cannot absorb consoles mid-game, so
+//     merging the moment the second player arrived would lock the game
+//     at 2 players forever. The room sits gathering (any size up to 4)
+//     until position 0 sends Start — which requires 2+ players, all
+//     ready — and Start works again later as a "re-link": a late joiner
+//     sits in the roster until everyone is back at a link menu and
+//     position 0 links the room up again.
+//
 // The server's job is small: it hosts named rooms, assigns player
-// indices, broadcasts the session start (with a shared wall clock every
-// cart RTC is pinned to), and from then on blindly relays opaque
+// indices, broadcasts each merge, and blindly relays opaque
 // peer-to-peer signals (SDP descriptions/candidates) so the peers can
 // build a full WebRTC mesh. Game data — including everyone's boot state
 // — never touches the server; the peers exchange it over the mesh once
 // it is up.
 //
-// Each player brings their *own* ROM (each GBA on a real cable has its
+// Each player brings their *own* ROM (each GBA on a real link has its
 // own cart, and they need not be identical — think version pairings).
 // Every peer simulates every side, so what a client needs is a local
 // copy of every player's ROM; the roster carries each player's ROM
@@ -159,7 +186,7 @@ export declare type ServerMessage = Message<"gbaroll.signaling.ServerMessage"> &
 export declare const ServerMessageSchema: GenMessage<ServerMessage>;
 
 /**
- * Open a new room. The sender becomes player 0 (the host).
+ * Open a new room. The sender takes position 0.
  *
  * @generated from message gbaroll.signaling.CreateRoom
  */
@@ -190,6 +217,18 @@ export declare type CreateRoom = Message<"gbaroll.signaling.CreateRoom"> & {
    * @generated from field: string rom_title = 4;
    */
   romTitle: string;
+
+  /**
+   * The creator's link peripheral (true = wireless adapter, false =
+   * link cable). Selects the room's merge policy (wireless rooms merge
+   * on their own; cable rooms gather until position 0 sends Start) and
+   * is echoed on every Roster so joiners whose machine was launched
+   * with the other peripheral can bow out before a merge builds them a
+   * link their game never booted with.
+   *
+   * @generated from field: bool wireless = 5;
+   */
+  wireless: boolean;
 };
 
 /**
@@ -201,7 +240,10 @@ export declare const CreateRoomSchema: GenMessage<CreateRoom>;
 /**
  * Join an existing room by code, bringing your own ROM (it need not
  * match anyone else's — but every member needs a copy of it, which
- * clients verify against their libraries before readying up).
+ * clients verify against their libraries before readying up). Rooms
+ * are joinable for their whole life, mid-session included: a join
+ * resets everyone's ready bit, and the merge that folds the newcomer
+ * in fires once every member has re-asserted it.
  *
  * @generated from message gbaroll.signaling.JoinRoom
  */
@@ -239,7 +281,14 @@ export declare type JoinRoom = Message<"gbaroll.signaling.JoinRoom"> & {
 export declare const JoinRoomSchema: GenMessage<JoinRoom>;
 
 /**
- * Flip the ready flag.
+ * Report the ready bit: "I hold every ROM in this roster." Every
+ * member reports it, position 0 included — occupancy changes reset it
+ * for everyone. An all-ready roster is what lets a merge fire: on its
+ * own in a wireless room, via position 0's Start in a cable one.
+ * In wireless rooms, withdrawing the bit (ready = false) from a member
+ * of the last merge also voids that merge, so the next all-ready
+ * convergence fires a fresh Starting even for unchanged membership —
+ * the retry path after a failed or dropped merge.
  *
  * @generated from message gbaroll.signaling.SetReady
  */
@@ -257,8 +306,12 @@ export declare type SetReady = Message<"gbaroll.signaling.SetReady"> & {
 export declare const SetReadySchema: GenMessage<SetReady>;
 
 /**
- * Host only: lock the room and start the session. Requires at least 2
- * players and every non-host player ready (the host never readies up).
+ * Position 0 only: link a cable room up. Requires 2+ players and every
+ * member ready (NOT_EVERYONE_READY otherwise). Always fires — sending
+ * it again later re-links the current membership, which is how a late
+ * joiner gets folded into a cable session once everyone is back at a
+ * link menu. Meaningless in a wireless room (those merge on their
+ * own): MALFORMED.
  *
  * @generated from message gbaroll.signaling.Start
  */
@@ -287,16 +340,16 @@ export declare type Leave = Message<"gbaroll.signaling.Leave"> & {
 export declare const LeaveSchema: GenMessage<Leave>;
 
 /**
- * Host only: throw a player out of the lobby, addressed by their stable
- * `seat` token (see PlayerInfo) — NOT the roster position, which
- * compacts as people come and go: a kick racing a departure must never
- * land on whoever slid into the vacated slot. A seat that's already
- * gone just bounces (MALFORMED), as does the current host's own seat
- * (whoever holds roster position 0 can't be kicked — that includes the
- * sender themselves). The kicked player gets Error(KICKED) and is
+ * Position 0 only: throw a player out of the room, addressed by their
+ * stable `seat` token (see PlayerInfo) — NOT the roster position,
+ * which compacts as people come and go: a kick racing a departure must
+ * never land on whoever slid into the vacated slot. A seat that's
+ * already gone just bounces (MALFORMED), as does position 0's own seat
+ * (whoever holds it can't be kicked — that includes the sender
+ * themselves). The kicked player gets Error(KICKED) and is
  * disconnected; everyone else sees the shrunken Roster (an occupancy
- * change, so ready flags reset as usual). Meaningless once the room has
- * started.
+ * change, so ready flags reset as usual). Works mid-session too — the
+ * next merge simply excludes the kicked player.
  *
  * @generated from message gbaroll.signaling.KickPlayer
  */
@@ -315,8 +368,9 @@ export declare const KickPlayerSchema: GenMessage<KickPlayer>;
 
 /**
  * An opaque peer signal (SDP/candidate) relayed through the server.
- * Only meaningful once the room has started. Client→server, `peer` is
- * the recipient's player index; server→client, the sender's.
+ * Only meaningful once a merge has been broadcast. Client→server,
+ * `peer` is the recipient's player index in the newest merge;
+ * server→client, the sender's.
  *
  * @generated from message gbaroll.signaling.Signal
  */
@@ -426,8 +480,8 @@ export declare const RoomJoinedSchema: GenMessage<RoomJoined>;
 /**
  * The room's occupancy, sent to every member whenever it changes. Slot
  * order is player order; `your_idx` is the recipient's slot (indices
- * compact downward when someone leaves the lobby). Any occupancy change
- * resets every ready flag. Slot 0 (the host) is always reported ready.
+ * compact downward when someone leaves). Any occupancy change resets
+ * every ready flag.
  *
  * @generated from message gbaroll.signaling.Roster
  */
@@ -441,6 +495,14 @@ export declare type Roster = Message<"gbaroll.signaling.Roster"> & {
    * @generated from field: uint32 your_idx = 2;
    */
   yourIdx: number;
+
+  /**
+   * The room's link peripheral, from CreateRoom — what every merge
+   * builds, regardless of what a joiner's machine launched with.
+   *
+   * @generated from field: bool wireless = 3;
+   */
+  wireless: boolean;
 };
 
 /**
@@ -496,10 +558,13 @@ export declare type PlayerInfo = Message<"gbaroll.signaling.PlayerInfo"> & {
 export declare const PlayerInfoSchema: GenMessage<PlayerInfo>;
 
 /**
- * The room is locked and the session begins. Every peer builds the same
- * link — `players[i]`'s capture (exchanged over the mesh) on side `i`.
- * The shared RTC seed doesn't come from the server: it rides the host's
- * boot payload over the peer protocol.
+ * A merge: the current membership links up. Arrives repeatedly over a
+ * room's life — every convergence in a wireless room, every Start in a
+ * cable one. Every peer
+ * builds the same link — `players[i]`'s capture (exchanged over the
+ * mesh) on side `i`; a member already playing walks out of its old
+ * link first. The shared RTC seed doesn't come from the server: it
+ * rides position 0's boot payload over the peer protocol.
  *
  * @generated from message gbaroll.signaling.Starting
  */
@@ -522,7 +587,7 @@ export declare type Starting = Message<"gbaroll.signaling.Starting"> & {
 export declare const StartingSchema: GenMessage<Starting>;
 
 /**
- * One player's identity in the start broadcast. Boot payloads (each
+ * One player's identity in the merge broadcast. Boot payloads (each
  * side's live capture) travel peer-to-peer once the mesh is up, not
  * through the server.
  *
@@ -547,8 +612,10 @@ export declare type StartPlayer = Message<"gbaroll.signaling.StartPlayer"> & {
 export declare const StartPlayerSchema: GenMessage<StartPlayer>;
 
 /**
- * A player disconnected after the room started (lobby departures show
- * up as a new Roster instead).
+ * A member of the newest merge disconnected. Alongside the shrunken
+ * Roster, so peers still building that merge's mesh stop waiting for
+ * the departed edge (an established session notices on its own — the
+ * transport is peer-to-peer).
  *
  * @generated from message gbaroll.signaling.PeerLeft
  */
@@ -611,9 +678,8 @@ export enum ErrorKind {
   ROOM_FULL = 3,
 
   /**
-   * Reserved vocabulary: servers no longer emit this — a started room's
-   * state is torn down at start (the relay needs none of it), so
-   * joining one reports ROOM_NOT_FOUND instead.
+   * Reserved vocabulary: rooms no longer "start", so nothing emits
+   * this — a room lives (and is joinable) until its last member goes.
    *
    * @generated from enum value: ERROR_KIND_ROOM_ALREADY_STARTED = 4;
    */
@@ -625,6 +691,8 @@ export enum ErrorKind {
   NOT_HOST = 5,
 
   /**
+   * A cable-room Start with fewer than 2 players or unready members.
+   *
    * @generated from enum value: ERROR_KIND_NOT_EVERYONE_READY = 6;
    */
   NOT_EVERYONE_READY = 6,
@@ -640,7 +708,7 @@ export enum ErrorKind {
   INTERNAL = 8,
 
   /**
-   * Not a rejected request: the host threw you out of the lobby. Sent
+   * Not a rejected request: position 0 threw you out of the room. Sent
    * to the kicked player right before the server closes their
    * connection.
    *

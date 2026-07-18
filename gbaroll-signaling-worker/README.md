@@ -14,19 +14,24 @@ Deployed at `wss://gbaroll-signaling.farts.fyi`.
 All rooms sit in a single Durable Object: create/join arrive as the
 first websocket *message*, so there's no room code to route on at
 upgrade time — and signaling is rendezvous-only traffic (game data
-flows peer-to-peer), so one object is plenty. Room state is kept
-exactly as long as it's useful:
+flows peer-to-peer), so one object is plenty.
 
-- A **lobby** lives in the object's storage (it must survive eviction)
-  and dies with its last member; an hourly sweep collects lobbies whose
-  close events were lost.
-- The moment a room **starts**, its record is deleted and the code is
-  free for reuse. Everything the brief post-start signal relay needs —
-  the sender's frozen index and the peers' socket ids — is stamped into
-  each socket's hibernation attachment, so a running session holds no
-  server-side state beyond its open sockets.
+A room is a persistent rendezvous with **dynamic membership**: players
+join and leave at any time, and the room **merges** (broadcasts
+`Starting`) repeatedly over its life. When a merge fires depends on the
+room's peripheral: **wireless** rooms merge on their own whenever 2+
+members all report ready with a membership the last merge doesn't
+cover (RFU games handle members drifting in and out), while **cable**
+rooms gather until position 0 sends `Start` — a cable game enumerates
+its chain at its link menu and can't absorb consoles mid-game — and
+`Start` fires again later to fold late joiners in. The record lives in
+the object's storage (it must survive eviction) and dies with its last
+member; an hourly sweep collects rooms whose close events were lost.
+Each merge stamps the relay routing — the sender's merge index and the
+peers' socket ids — into every member's hibernation attachment, so
+relaying a signal never reads the record.
 
-Sockets use the hibernation API throughout, so idle lobbies don't keep
+Sockets use the hibernation API throughout, so idle rooms don't keep
 the object pinned. Clients may send a text `"ping"` as a keepalive; a
 configured auto-response answers `"pong"` without waking the object.
 
@@ -68,6 +73,6 @@ pnpm gen    # after touching ../gbaroll-signaling/proto/signaling.proto
 ```sh
 pnpm test              # codec fixtures, byte-exact against the Rust (prost) encoding
 pnpm dev               # then, in another terminal:
-node scripts/smoke.ts  # end-to-end: create/join/ready/start/relay/leave/keepalive
+node scripts/smoke.ts  # end-to-end: the dynamic room life — merges, re-merges, kicks, leaves
 node scripts/smoke.ts wss://gbaroll-signaling.farts.fyi/   # against production
 ```

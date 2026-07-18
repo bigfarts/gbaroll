@@ -636,6 +636,24 @@ impl Runtime {
                             }
                             _ => false,
                         };
+                        if continued
+                            && matches!(
+                                end,
+                                SessionEnd::PeerQuit { .. }
+                                    | SessionEnd::PeerDisconnected { .. }
+                                    | SessionEnd::Desync { .. }
+                            )
+                        {
+                            // The merged session died without our
+                            // say-so; if this machine still holds the
+                            // room, the lobby arranges a re-merge
+                            // among whoever's left in range. (A
+                            // deliberate Unplugged is either a merge
+                            // walking the link out — the re-merge is
+                            // already in flight — or the player
+                            // leaving the room.)
+                            crate::ui::notify_session_dropped();
+                        }
                         if !continued {
                             self.last_end = Some(end);
                             self.close_session();

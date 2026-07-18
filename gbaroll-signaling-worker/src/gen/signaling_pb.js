@@ -4,15 +4,42 @@
 // worker (protobuf-es, via `pnpm gen`) both generate their types from
 // it.
 //
+// A room is a persistent rendezvous — the airwaves the players share
+// (or, on a cable link, the chain their consoles plug into) — not a
+// one-shot lobby. Membership is dynamic: players join and leave at any
+// time, and the room lives until its last member goes. A merge (the
+// Starting broadcast) links the current membership up; members already
+// playing walk out of their current link and into the new one, and the
+// room code keeps working the whole time.
+//
+// When a merge fires depends on the room's peripheral, because the two
+// kinds of hardware genuinely differ:
+//
+//   - *Wireless* rooms merge on their own — RFU is built for dynamic
+//     membership (clients drift in and out of a host's range and the
+//     games handle it), so whenever the room holds 2+ players, every
+//     member reports ready (the "I hold every ROM in this roster" bit —
+//     see SetReady), and the membership differs from the last merge,
+//     the server broadcasts Starting. A friend joins mid-session and is
+//     folded in as soon as everyone re-asserts.
+//
+//   - *Cable* rooms gather first: a cable game enumerates its chain
+//     when its link menu runs and cannot absorb consoles mid-game, so
+//     merging the moment the second player arrived would lock the game
+//     at 2 players forever. The room sits gathering (any size up to 4)
+//     until position 0 sends Start — which requires 2+ players, all
+//     ready — and Start works again later as a "re-link": a late joiner
+//     sits in the roster until everyone is back at a link menu and
+//     position 0 links the room up again.
+//
 // The server's job is small: it hosts named rooms, assigns player
-// indices, broadcasts the session start (with a shared wall clock every
-// cart RTC is pinned to), and from then on blindly relays opaque
+// indices, broadcasts each merge, and blindly relays opaque
 // peer-to-peer signals (SDP descriptions/candidates) so the peers can
 // build a full WebRTC mesh. Game data — including everyone's boot state
 // — never touches the server; the peers exchange it over the mesh once
 // it is up.
 //
-// Each player brings their *own* ROM (each GBA on a real cable has its
+// Each player brings their *own* ROM (each GBA on a real link has its
 // own cart, and they need not be identical — think version pairings).
 // Every peer simulates every side, so what a client needs is a local
 // copy of every player's ROM; the roster carries each player's ROM
@@ -34,7 +61,7 @@ import { enumDesc, fileDesc, messageDesc, tsEnum } from "@bufbuild/protobuf/code
  * Describes the file signaling.proto.
  */
 export const file_signaling = /*@__PURE__*/
-  fileDesc("Cg9zaWduYWxpbmcucHJvdG8SEWdiYXJvbGwuc2lnbmFsaW5nIukCCg1DbGllbnRNZXNzYWdlEjQKC2NyZWF0ZV9yb29tGAEgASgLMh0uZ2Jhcm9sbC5zaWduYWxpbmcuQ3JlYXRlUm9vbUgAEjAKCWpvaW5fcm9vbRgCIAEoCzIbLmdiYXJvbGwuc2lnbmFsaW5nLkpvaW5Sb29tSAASMAoJc2V0X3JlYWR5GAMgASgLMhsuZ2Jhcm9sbC5zaWduYWxpbmcuU2V0UmVhZHlIABIpCgVzdGFydBgEIAEoCzIYLmdiYXJvbGwuc2lnbmFsaW5nLlN0YXJ0SAASKwoGc2lnbmFsGAUgASgLMhkuZ2Jhcm9sbC5zaWduYWxpbmcuU2lnbmFsSAASKQoFbGVhdmUYBiABKAsyGC5nYmFyb2xsLnNpZ25hbGluZy5MZWF2ZUgAEjQKC2tpY2tfcGxheWVyGAcgASgLMh0uZ2Jhcm9sbC5zaWduYWxpbmcuS2lja1BsYXllckgAQgUKA21zZyKXAwoNU2VydmVyTWVzc2FnZRIpCgVoZWxsbxgBIAEoCzIYLmdiYXJvbGwuc2lnbmFsaW5nLkhlbGxvSAASNgoMcm9vbV9jcmVhdGVkGAIgASgLMh4uZ2Jhcm9sbC5zaWduYWxpbmcuUm9vbUNyZWF0ZWRIABI0Cgtyb29tX2pvaW5lZBgDIAEoCzIdLmdiYXJvbGwuc2lnbmFsaW5nLlJvb21Kb2luZWRIABIrCgZyb3N0ZXIYBCABKAsyGS5nYmFyb2xsLnNpZ25hbGluZy5Sb3N0ZXJIABIvCghzdGFydGluZxgFIAEoCzIbLmdiYXJvbGwuc2lnbmFsaW5nLlN0YXJ0aW5nSAASKwoGc2lnbmFsGAYgASgLMhkuZ2Jhcm9sbC5zaWduYWxpbmcuU2lnbmFsSAASMAoJcGVlcl9sZWZ0GAcgASgLMhsuZ2Jhcm9sbC5zaWduYWxpbmcuUGVlckxlZnRIABIpCgVlcnJvchgIIAEoCzIYLmdiYXJvbGwuc2lnbmFsaW5nLkVycm9ySABCBQoDbXNnIloKCkNyZWF0ZVJvb20SGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIMCgRuaWNrGAIgASgJEhEKCXJvbV9jcmMzMhgDIAEoDRIRCglyb21fdGl0bGUYBCABKAkiZgoISm9pblJvb20SGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIMCgRjb2RlGAIgASgJEgwKBG5pY2sYAyABKAkSEQoJcm9tX2NyYzMyGAQgASgNEhEKCXJvbV90aXRsZRgFIAEoCSIZCghTZXRSZWFkeRINCgVyZWFkeRgBIAEoCCIHCgVTdGFydCIHCgVMZWF2ZSIaCgpLaWNrUGxheWVyEgwKBHNlYXQYASABKA0iJwoGU2lnbmFsEgwKBHBlZXIYASABKA0SDwoHcGF5bG9hZBgCIAEoDCI6CgVIZWxsbxIxCgtpY2Vfc2VydmVycxgBIAMoCzIcLmdiYXJvbGwuc2lnbmFsaW5nLkljZVNlcnZlciJlCglJY2VTZXJ2ZXISDAoEdXJscxgBIAMoCRIVCgh1c2VybmFtZRgCIAEoCUgAiAEBEhcKCmNyZWRlbnRpYWwYAyABKAlIAYgBAUILCglfdXNlcm5hbWVCDQoLX2NyZWRlbnRpYWwiGwoLUm9vbUNyZWF0ZWQSDAoEY29kZRgBIAEoCSIaCgpSb29tSm9pbmVkEgwKBGNvZGUYASABKAkiSgoGUm9zdGVyEi4KB3BsYXllcnMYASADKAsyHS5nYmFyb2xsLnNpZ25hbGluZy5QbGF5ZXJJbmZvEhAKCHlvdXJfaWR4GAIgASgNIl0KClBsYXllckluZm8SDAoEbmljaxgBIAEoCRINCgVyZWFkeRgCIAEoCBIRCglyb21fY3JjMzIYAyABKA0SEQoJcm9tX3RpdGxlGAQgASgJEgwKBHNlYXQYBSABKA0iTQoIU3RhcnRpbmcSLwoHcGxheWVycxgBIAMoCzIeLmdiYXJvbGwuc2lnbmFsaW5nLlN0YXJ0UGxheWVyEhAKCHlvdXJfaWR4GAIgASgNIi4KC1N0YXJ0UGxheWVyEgwKBG5pY2sYASABKAkSEQoJcm9tX2NyYzMyGAIgASgNIh4KCFBlZXJMZWZ0EhIKCnBsYXllcl9pZHgYASABKA0iRAoFRXJyb3ISKgoEa2luZBgBIAEoDjIcLmdiYXJvbGwuc2lnbmFsaW5nLkVycm9yS2luZBIPCgdtZXNzYWdlGAIgASgJKrUCCglFcnJvcktpbmQSGgoWRVJST1JfS0lORF9VTlNQRUNJRklFRBAAEigKJEVSUk9SX0tJTkRfUFJPVE9DT0xfVkVSU0lPTl9NSVNNQVRDSBABEh0KGUVSUk9SX0tJTkRfUk9PTV9OT1RfRk9VTkQQAhIYChRFUlJPUl9LSU5EX1JPT01fRlVMTBADEiMKH0VSUk9SX0tJTkRfUk9PTV9BTFJFQURZX1NUQVJURUQQBBIXChNFUlJPUl9LSU5EX05PVF9IT1NUEAUSIQodRVJST1JfS0lORF9OT1RfRVZFUllPTkVfUkVBRFkQBhIYChRFUlJPUl9LSU5EX01BTEZPUk1FRBAHEhcKE0VSUk9SX0tJTkRfSU5URVJOQUwQCBIVChFFUlJPUl9LSU5EX0tJQ0tFRBAJYgZwcm90bzM");
+  fileDesc("Cg9zaWduYWxpbmcucHJvdG8SEWdiYXJvbGwuc2lnbmFsaW5nIukCCg1DbGllbnRNZXNzYWdlEjQKC2NyZWF0ZV9yb29tGAEgASgLMh0uZ2Jhcm9sbC5zaWduYWxpbmcuQ3JlYXRlUm9vbUgAEjAKCWpvaW5fcm9vbRgCIAEoCzIbLmdiYXJvbGwuc2lnbmFsaW5nLkpvaW5Sb29tSAASMAoJc2V0X3JlYWR5GAMgASgLMhsuZ2Jhcm9sbC5zaWduYWxpbmcuU2V0UmVhZHlIABIpCgVzdGFydBgEIAEoCzIYLmdiYXJvbGwuc2lnbmFsaW5nLlN0YXJ0SAASKwoGc2lnbmFsGAUgASgLMhkuZ2Jhcm9sbC5zaWduYWxpbmcuU2lnbmFsSAASKQoFbGVhdmUYBiABKAsyGC5nYmFyb2xsLnNpZ25hbGluZy5MZWF2ZUgAEjQKC2tpY2tfcGxheWVyGAcgASgLMh0uZ2Jhcm9sbC5zaWduYWxpbmcuS2lja1BsYXllckgAQgUKA21zZyKXAwoNU2VydmVyTWVzc2FnZRIpCgVoZWxsbxgBIAEoCzIYLmdiYXJvbGwuc2lnbmFsaW5nLkhlbGxvSAASNgoMcm9vbV9jcmVhdGVkGAIgASgLMh4uZ2Jhcm9sbC5zaWduYWxpbmcuUm9vbUNyZWF0ZWRIABI0Cgtyb29tX2pvaW5lZBgDIAEoCzIdLmdiYXJvbGwuc2lnbmFsaW5nLlJvb21Kb2luZWRIABIrCgZyb3N0ZXIYBCABKAsyGS5nYmFyb2xsLnNpZ25hbGluZy5Sb3N0ZXJIABIvCghzdGFydGluZxgFIAEoCzIbLmdiYXJvbGwuc2lnbmFsaW5nLlN0YXJ0aW5nSAASKwoGc2lnbmFsGAYgASgLMhkuZ2Jhcm9sbC5zaWduYWxpbmcuU2lnbmFsSAASMAoJcGVlcl9sZWZ0GAcgASgLMhsuZ2Jhcm9sbC5zaWduYWxpbmcuUGVlckxlZnRIABIpCgVlcnJvchgIIAEoCzIYLmdiYXJvbGwuc2lnbmFsaW5nLkVycm9ySABCBQoDbXNnImwKCkNyZWF0ZVJvb20SGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIMCgRuaWNrGAIgASgJEhEKCXJvbV9jcmMzMhgDIAEoDRIRCglyb21fdGl0bGUYBCABKAkSEAoId2lyZWxlc3MYBSABKAgiZgoISm9pblJvb20SGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIMCgRjb2RlGAIgASgJEgwKBG5pY2sYAyABKAkSEQoJcm9tX2NyYzMyGAQgASgNEhEKCXJvbV90aXRsZRgFIAEoCSIZCghTZXRSZWFkeRINCgVyZWFkeRgBIAEoCCIHCgVTdGFydCIHCgVMZWF2ZSIaCgpLaWNrUGxheWVyEgwKBHNlYXQYASABKA0iJwoGU2lnbmFsEgwKBHBlZXIYASABKA0SDwoHcGF5bG9hZBgCIAEoDCI6CgVIZWxsbxIxCgtpY2Vfc2VydmVycxgBIAMoCzIcLmdiYXJvbGwuc2lnbmFsaW5nLkljZVNlcnZlciJlCglJY2VTZXJ2ZXISDAoEdXJscxgBIAMoCRIVCgh1c2VybmFtZRgCIAEoCUgAiAEBEhcKCmNyZWRlbnRpYWwYAyABKAlIAYgBAUILCglfdXNlcm5hbWVCDQoLX2NyZWRlbnRpYWwiGwoLUm9vbUNyZWF0ZWQSDAoEY29kZRgBIAEoCSIaCgpSb29tSm9pbmVkEgwKBGNvZGUYASABKAkiXAoGUm9zdGVyEi4KB3BsYXllcnMYASADKAsyHS5nYmFyb2xsLnNpZ25hbGluZy5QbGF5ZXJJbmZvEhAKCHlvdXJfaWR4GAIgASgNEhAKCHdpcmVsZXNzGAMgASgIIl0KClBsYXllckluZm8SDAoEbmljaxgBIAEoCRINCgVyZWFkeRgCIAEoCBIRCglyb21fY3JjMzIYAyABKA0SEQoJcm9tX3RpdGxlGAQgASgJEgwKBHNlYXQYBSABKA0iTQoIU3RhcnRpbmcSLwoHcGxheWVycxgBIAMoCzIeLmdiYXJvbGwuc2lnbmFsaW5nLlN0YXJ0UGxheWVyEhAKCHlvdXJfaWR4GAIgASgNIi4KC1N0YXJ0UGxheWVyEgwKBG5pY2sYASABKAkSEQoJcm9tX2NyYzMyGAIgASgNIh4KCFBlZXJMZWZ0EhIKCnBsYXllcl9pZHgYASABKA0iRAoFRXJyb3ISKgoEa2luZBgBIAEoDjIcLmdiYXJvbGwuc2lnbmFsaW5nLkVycm9yS2luZBIPCgdtZXNzYWdlGAIgASgJKrUCCglFcnJvcktpbmQSGgoWRVJST1JfS0lORF9VTlNQRUNJRklFRBAAEigKJEVSUk9SX0tJTkRfUFJPVE9DT0xfVkVSU0lPTl9NSVNNQVRDSBABEh0KGUVSUk9SX0tJTkRfUk9PTV9OT1RfRk9VTkQQAhIYChRFUlJPUl9LSU5EX1JPT01fRlVMTBADEiMKH0VSUk9SX0tJTkRfUk9PTV9BTFJFQURZX1NUQVJURUQQBBIXChNFUlJPUl9LSU5EX05PVF9IT1NUEAUSIQodRVJST1JfS0lORF9OT1RfRVZFUllPTkVfUkVBRFkQBhIYChRFUlJPUl9LSU5EX01BTEZPUk1FRBAHEhcKE0VSUk9SX0tJTkRfSU5URVJOQUwQCBIVChFFUlJPUl9LSU5EX0tJQ0tFRBAJYgZwcm90bzM");
 
 /**
  * Describes the message gbaroll.signaling.ClientMessage.

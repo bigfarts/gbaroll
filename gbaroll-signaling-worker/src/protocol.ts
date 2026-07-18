@@ -22,10 +22,22 @@ export * from "./gen/signaling_pb.js";
 
 /// Bumped on any incompatible protocol change. Carried on the first
 /// message (create/join); the server rejects mismatches.
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
-/** Most players a room holds — the size of a real multi-cable chain. */
-export const MAX_PLAYERS = 4;
+/** Most players a cable room holds — the size of a real multi-cable
+ * chain. */
+export const MAX_CABLE_PLAYERS = 4;
+
+/** Most players a wireless room holds — one full RFU group: a host
+ * plus its four clients. (The emulated airwaves underneath are
+ * uncapped; this is room policy, and the knob to turn for union-room
+ * experiments.) */
+export const MAX_WIRELESS_PLAYERS = 5;
+
+/** The capacity of a room with the given peripheral. */
+export function maxPlayers(wireless: boolean): number {
+  return wireless ? MAX_WIRELESS_PLAYERS : MAX_CABLE_PLAYERS;
+}
 
 /** Length of a generated room code. */
 export const ROOM_CODE_LEN = 6;
@@ -80,8 +92,11 @@ export function serverRoomJoined(code: string): ServerMessage {
 export function serverRoster(
   players: MessageInitShape<typeof PlayerInfoSchema>[],
   yourIdx: number,
+  wireless: boolean,
 ): ServerMessage {
-  return create(ServerMessageSchema, { msg: { case: "roster", value: { players, yourIdx } } });
+  return create(ServerMessageSchema, {
+    msg: { case: "roster", value: { players, yourIdx, wireless } },
+  });
 }
 
 export function serverStarting(
@@ -110,10 +125,11 @@ export function clientCreateRoom(
   nick: string,
   romCrc32: number,
   romTitle: string,
+  wireless: boolean,
   protocolVersion = PROTOCOL_VERSION,
 ): ClientMessage {
   return create(ClientMessageSchema, {
-    msg: { case: "createRoom", value: { protocolVersion, nick, romCrc32, romTitle } },
+    msg: { case: "createRoom", value: { protocolVersion, nick, romCrc32, romTitle, wireless } },
   });
 }
 
@@ -133,6 +149,7 @@ export function clientSetReady(ready: boolean): ClientMessage {
   return create(ClientMessageSchema, { msg: { case: "setReady", value: { ready } } });
 }
 
+/** Position 0 only, cable rooms only: link the room up (again). */
 export function clientStart(): ClientMessage {
   return create(ClientMessageSchema, { msg: { case: "start", value: {} } });
 }

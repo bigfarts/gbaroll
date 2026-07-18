@@ -97,8 +97,9 @@ struct Metric {
 /// Per-seat identity colours (TokyoNight set): the lobby roster's dots
 /// and the shared ping graph's traces, both indexed by player seat so
 /// they agree. Deliberately disjoint from the health-tone palette
-/// (green/amber/red) so identity never reads as a judgement.
-pub(super) const PEER_COLORS: [&str; 4] = ["#7dcfff", "#bb9af7", "#73daca", "#ff9e64"];
+/// (green/amber/red) so identity never reads as a judgement. A wireless
+/// room can seat more players than there are colours; they cycle.
+pub(super) const PEER_COLORS: [&str; 5] = ["#7dcfff", "#bb9af7", "#73daca", "#ff9e64", "#7aa2f7"];
 
 fn seat_color(player: usize) -> &'static str {
     PEER_COLORS[player % PEER_COLORS.len()]
@@ -351,13 +352,40 @@ pub(super) fn skew_tone_css(skew: i32) -> &'static str {
     tone_for_abs(skew, 3, 7).css()
 }
 
-/// The dropped telemetry card for a connected cable: the shared clock
-/// metrics, per-peer pings, the present-delay control, and disconnect.
+/// Which face of the connected card is up: the link statistics or the
+/// room. Its own signal (not component state) so the pick survives the
+/// panel collapsing and reopening.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TeleTab {
+    Stats,
+    Room,
+}
+
+static TELE_TAB: GlobalSignal<TeleTab> = Signal::global(|| TeleTab::Stats);
+
+/// The dropped telemetry card for a merged link, split across two tabs
+/// so neither crowds the other: **Stats** (the shared clock metrics,
+/// per-peer pings, the present-delay control) and **Room** (still live
+/// mid-session — dynamic membership means the code keeps inviting and
+/// the roster keeps changing). The way out stays pinned below both.
 #[component]
 pub fn TelemetryCard() -> Element {
     let ctx = use_ctx();
     let _ = SESSION_EPOCH.read();
     let _ = FRAME_REV.read();
+    let tab = *TELE_TAB.read();
+
+    // The session's peripheral names the card, as on the offline body.
+    let link = ctx
+        .runtime
+        .borrow()
+        .descriptor()
+        .map(|d| d.link)
+        .unwrap_or_default();
+    // Whether this machine still holds the room: leaving then covers
+    // both halves (the room and the link); with the room already gone
+    // (server lost), only the link remains to let go of.
+    let in_room = super::cable::LOBBY_UI.read().is_some();
 
     let peers: Vec<(usize, String)> = {
         let rt = ctx.runtime.borrow();
@@ -400,30 +428,62 @@ pub fn TelemetryCard() -> Element {
     rsx! {
         div { class: "tele-card",
             div { class: "tele-head",
-                h3 { "Link cable" }
+                h3 { {link.label()} }
                 button {
                     class: "btn ghost icon-btn",
                     onclick: move |_| *PANEL_OPEN.write() = false,
                     icons::ChevronUp {}
                 }
             }
-            TelemetryCards { ctx_key: FRAME_REV() }
-            // A control, not a metric — visually its own group.
-            div { class: "delay-section",
-                DelayControl {}
+            div { class: "tabs tele-tabs",
+                button {
+                    class: if tab == TeleTab::Stats { "btn tab active" } else { "btn tab" },
+                    onclick: move |_| *TELE_TAB.write() = TeleTab::Stats,
+                    "Stats"
+                }
+                button {
+                    class: if tab == TeleTab::Room { "btn tab active" } else { "btn tab" },
+                    onclick: move |_| *TELE_TAB.write() = TeleTab::Room,
+                    "Room"
+                }
+            }
+            if tab == TeleTab::Stats {
+                TelemetryCards { ctx_key: FRAME_REV() }
+                // A control, not a metric — visually its own group.
+                div { class: "delay-section",
+                    DelayControl {}
+                }
+            } else if in_room {
+                // The room stays live while the session runs: the code
+                // keeps inviting; wireless rooms re-merge on their own,
+                // and a cable room's creator re-links to fold a late
+                // joiner in (everyone back at a link menu first).
+                super::cable::RoomSection {}
+                div { class: "menu-actions",
+                    super::cable::LinkUpButton {}
+                }
+            } else {
+                p { class: "sub", "The room is gone — the session plays on." }
             }
             div { class: "menu-actions",
                 button {
                     class: "btn danger",
                     onclick: {
                         let ctx = ctx.clone();
-                        move |_| ctx.runtime.borrow().unplug()
+                        move |_| {
+                            // Walking out of range: the room first (or a
+                            // lingering unplug would read as a dead merge
+                            // and drag the room into a pointless
+                            // re-merge), then the link.
+                            super::cable::leave();
+                            ctx.runtime.borrow().unplug();
+                        }
                     },
                     icons::Unplug {}
-                    "Disconnect cable"
+                    if in_room { "Leave the room" } else { "Disconnect" }
                 }
             }
-            p { class: "hint", "Your local game keeps running after disconnecting." }
+            p { class: "hint", "Your local game keeps running after you leave." }
         }
     }
 }

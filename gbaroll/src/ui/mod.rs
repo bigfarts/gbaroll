@@ -14,6 +14,9 @@ mod telemetry;
 mod touch;
 
 pub use shell::App;
+/// The runtime's unplug-continue path pokes the room's lobby through
+/// this when a merged session dies without a roster change.
+pub use cable::notify_session_dropped;
 
 use std::cell::RefCell;
 use std::rc::Rc;

@@ -1,6 +1,7 @@
 // End-to-end exercise of a running worker over the real wire protocol:
-// create/join/ready/start/signal-relay/leave, plus the error paths and
-// the text-ping keepalive.
+// the dynamic-membership room life — create/join/ready/merge, joins and
+// re-merges mid-session, the void-and-retry dance, kicks, leaves — plus
+// the error paths and the text-ping keepalive.
 //
 //   pnpm dev                 # terminal 1
 //   node scripts/smoke.ts    # terminal 2 (or: node scripts/smoke.ts wss://…)
@@ -122,16 +123,18 @@ a.sendText("ping");
 await a.expectText("pong");
 console.log("  ok: text ping answered with pong");
 
-a.send(clientCreateRoom("alice", 0xaaaa, "GAME-A"));
+a.send(clientCreateRoom("alice", 0xaaaa, "GAME-A", true));
 const { code } = await a.expect("roomCreated");
 assert(/^[2-9A-HJKMNP-Z]{6}$/.test(code), `room code well-formed (${code})`);
 let roster = await a.expect("roster");
-assert(roster.players.length === 1 && roster.yourIdx === 0, "host alone in the roster");
+assert(roster.players.length === 1 && roster.yourIdx === 0, "creator alone in the roster");
+assert(roster.wireless, "roster carries the room's peripheral");
+assert(!roster.players[0].ready, "position 0 readies like everyone else now");
 
-// --- premature start: a room can't start with a single player ---
-a.send(clientStart());
-const tooFew = await a.expect("error");
-assert(tooFew.kind === ErrorKind.NOT_EVERYONE_READY, "start blocked with fewer than 2 players");
+// --- a lone ready member doesn't merge ---
+a.send(clientSetReady(true));
+roster = await a.expect("roster");
+assert(roster.players[0].ready, "position 0's ready bit is real");
 
 // --- join: wrong code, then right code (lowercased: join normalizes) ---
 const b = await Client.connect(URL);
@@ -143,125 +146,282 @@ b.send(clientJoinRoom(code.toLowerCase(), "bob", 0xbbbb, "GAME-B"));
 await b.expect("roomJoined");
 roster = await b.expect("roster");
 assert(roster.players.length === 2 && roster.yourIdx === 1, "joiner sees both, idx 1");
+assert(!roster.players[0].ready, "occupancy change reset every ready bit");
 roster = await a.expect("roster");
-assert(roster.players.length === 2 && roster.yourIdx === 0, "host sees both, idx 0");
+assert(roster.players.length === 2 && roster.yourIdx === 0, "creator sees both, idx 0");
 
-// --- only the host starts; readying is legacy but still mirrored ---
-b.send(clientStart());
-const notHost = await b.expect("error");
-assert(notHost.kind === ErrorKind.NOT_HOST, "non-host can't start");
-b.send(clientSetReady(true));
-roster = await a.expect("roster");
-assert(roster.players[1].ready, "host still sees the legacy ready flag");
+// --- the room merges on convergence: 2+ members, everyone ready ---
+a.send(clientSetReady(true));
+await a.expect("roster");
 await b.expect("roster");
-a.send(clientStart());
+b.send(clientSetReady(true));
+await a.expect("roster");
+await b.expect("roster");
 const startA = await a.expect("starting");
 const startB = await b.expect("starting");
-assert(startA.yourIdx === 0 && startB.yourIdx === 1, "start carries per-player indices");
-assert(startA.players.length === 2, "start carries the full seating");
+assert(startA.yourIdx === 0 && startB.yourIdx === 1, "merge carries per-player indices");
+assert(startA.players.length === 2, "merge carries the full seating");
 
-// --- the room record dies at start: the code no longer resolves ---
-const c = await Client.connect(URL);
-await c.expect("hello");
-c.send(clientJoinRoom(code, "carol", 1, "X"));
-const started = await c.expect("error");
-assert(started.kind === ErrorKind.ROOM_NOT_FOUND, "room record deleted at session start");
-
-// --- ...but the signal relay still works, room state and all gone ---
+// --- the signal relay rides the merge routing ---
 a.send(clientSignal(1, new Uint8Array([1, 2, 3])));
 const sigB = await b.expect("signal");
-assert(sigB.peer === 0 && [...sigB.payload].join() === "1,2,3", "signal relayed host → joiner");
+assert(sigB.peer === 0 && [...sigB.payload].join() === "1,2,3", "signal relayed 0 → 1");
 b.send(clientSignal(0, new Uint8Array([9])));
 const sigA = await a.expect("signal");
-assert(sigA.peer === 1 && [...sigA.payload].join() === "9", "signal relayed joiner → host");
+assert(sigA.peer === 1 && [...sigA.payload].join() === "9", "signal relayed 1 → 0");
+
+// --- the room record lives on: the code stays joinable mid-session ---
+const c = await Client.connect(URL);
+await c.expect("hello");
+c.send(clientJoinRoom(code, "carol", 0xcccc, "GAME-C"));
+await c.expect("roomJoined");
+roster = await c.expect("roster");
+assert(roster.players.length === 3 && roster.yourIdx === 2, "mid-session join lands in the roster");
+await a.expect("roster");
+await b.expect("roster");
+
+// --- a non-member's withdrawn ready leaves the standing merge alone ---
+c.send(clientSetReady(false));
+await a.expect("roster");
+await b.expect("roster");
+await c.expect("roster");
+
+// --- an unmerged member's departure sends no PeerLeft ---
+c.send(clientLeave());
+await c.expectClosed();
+roster = await a.expect("roster");
+assert(roster.players.length === 2, "unmerged member's departure shrinks the roster only");
+await b.expect("roster");
+
+// --- unchanged membership doesn't re-merge... ---
+a.send(clientSetReady(true));
+await a.expect("roster");
+await b.expect("roster");
+b.send(clientSetReady(true));
+await a.expect("roster");
+await b.expect("roster");
+a.send(clientSignal(1, new Uint8Array([7])));
+const noRemerge = await b.expect("signal");
+assert(noRemerge.payload[0] === 7, "all-ready with unchanged membership stays merged (no Starting)");
+
+// --- ...until a merged member voids it: the withdraw-and-retry dance ---
+b.send(clientSetReady(false));
+await a.expect("roster");
+await b.expect("roster");
+b.send(clientSetReady(true));
+await a.expect("roster");
+await b.expect("roster");
+const retryA = await a.expect("starting");
+await b.expect("starting");
+assert(retryA.players.length === 2, "a voided merge re-fires for unchanged membership");
+
+// --- a fresh joiner folds in through a re-merge ---
+const d = await Client.connect(URL);
+await d.expect("hello");
+d.send(clientJoinRoom(code, "dave", 0xdddd, "GAME-D"));
+await d.expect("roomJoined");
+roster = await d.expect("roster");
+const daveSeat = roster.players[2].seat;
+assert(daveSeat === 3, "seats never get reused (carol's is retired)");
+await a.expect("roster");
+await b.expect("roster");
+a.send(clientSetReady(true));
+await a.expect("roster");
+await b.expect("roster");
+await d.expect("roster");
+b.send(clientSetReady(true));
+await a.expect("roster");
+await b.expect("roster");
+await d.expect("roster");
+d.send(clientSetReady(true));
+await a.expect("roster");
+await b.expect("roster");
+await d.expect("roster");
+const remergeA = await a.expect("starting");
+await b.expect("starting");
+const remergeD = await d.expect("starting");
+assert(remergeA.players.length === 3 && remergeD.yourIdx === 2, "the newcomer merges in at idx 2");
+
+// --- the relay re-stamped: position 0 reaches the newcomer ---
+a.send(clientSignal(2, new Uint8Array([42])));
+const sigD = await d.expect("signal");
+assert(sigD.peer === 0 && sigD.payload[0] === 42, "relay routing follows the newest merge");
+
+// --- only position 0 kicks; kicks address seats ---
+b.send(clientKickPlayer(daveSeat));
+const notHost = await b.expect("error");
+assert(notHost.kind === ErrorKind.NOT_HOST, "only position 0 can kick");
+a.send(clientKickPlayer(0));
+const selfKick = await a.expect("error");
+assert(selfKick.kind === ErrorKind.MALFORMED, "position 0 can't kick themselves");
+a.send(clientKickPlayer(99));
+const wildKick = await a.expect("error");
+assert(wildKick.kind === ErrorKind.MALFORMED, "unknown seat bounced");
+a.send(clientKickPlayer(daveSeat));
+const kicked = await d.expect("error");
+assert(kicked.kind === ErrorKind.KICKED, "kicked player told why");
+await d.expectClosed();
+console.log("  ok: kicked player disconnected");
+let left = await a.expect("peerLeft");
+assert(left.playerIdx === 2, "a merged member's kick reaches the peers as PeerLeft");
+await b.expect("peerLeft");
+roster = await a.expect("roster");
+assert(roster.players.length === 2, "position 0 sees the seat freed");
+await b.expect("roster");
 
 // --- protocol version mismatch closes the connection ---
-c.send(clientCreateRoom("carol", 1, "X", 999));
-const mismatch = await c.expect("error");
+const e = await Client.connect(URL);
+await e.expect("hello");
+e.send(clientCreateRoom("eve", 1, "X", false, 999));
+const mismatch = await e.expect("error");
 assert(mismatch.kind === ErrorKind.PROTOCOL_VERSION_MISMATCH, "old protocol rejected");
-await c.expectClosed();
+await e.expectClosed();
 console.log("  ok: mismatched client disconnected");
 
-// --- disconnect after start → PeerLeft with a frozen index ---
+// --- a merged member's disconnect → PeerLeft + a shrunken roster ---
 b.close();
-const left = await a.expect("peerLeft");
-assert(left.playerIdx === 1, "departure after start reported with a frozen index");
+left = await a.expect("peerLeft");
+assert(left.playerIdx === 1, "merged member's disconnect reported to the peers");
+roster = await a.expect("roster");
+assert(roster.players.length === 1, "the roster shrinks with the disconnect");
 
-// --- explicit leave closes the socket ---
+// --- the room dies with its last member ---
 a.send(clientLeave());
 await a.expectClosed();
 console.log("  ok: leave closes the connection");
-
-// --- a lobby (unstarted) dies with its last member ---
-const d = await Client.connect(URL);
-await d.expect("hello");
-d.send(clientCreateRoom("dave", 1, "X"));
-const lobby = await d.expect("roomCreated");
-await d.expect("roster");
-d.send(clientLeave());
-await d.expectClosed();
-const e = await Client.connect(URL);
-await e.expect("hello");
-e.send(clientJoinRoom(lobby.code, "eve", 1, "X"));
-const gone = await e.expect("error");
-assert(gone.kind === ErrorKind.ROOM_NOT_FOUND, "lobby deleted once its last member left");
-e.close();
-
-// --- the host kicks; nobody else does ---
 const f = await Client.connect(URL);
 await f.expect("hello");
-f.send(clientCreateRoom("frank", 1, "X"));
-const kickRoom = await f.expect("roomCreated");
-roster = await f.expect("roster");
-assert(roster.players[0].seat === 0, "host holds seat 0");
-const g = await Client.connect(URL);
-await g.expect("hello");
-g.send(clientJoinRoom(kickRoom.code, "grace", 1, "X"));
-await g.expect("roomJoined");
-roster = await g.expect("roster");
-const graceSeat = roster.players[1].seat;
-assert(graceSeat === 1, "joiner assigned the next seat");
-await f.expect("roster");
-g.send(clientKickPlayer(0));
-const notHostKick = await g.expect("error");
-assert(notHostKick.kind === ErrorKind.NOT_HOST, "non-host can't kick");
-f.send(clientKickPlayer(0));
-const selfKick = await f.expect("error");
-assert(selfKick.kind === ErrorKind.MALFORMED, "host can't kick themselves");
-f.send(clientKickPlayer(99));
-const wildKick = await f.expect("error");
-assert(wildKick.kind === ErrorKind.MALFORMED, "unknown seat bounced");
-f.send(clientKickPlayer(graceSeat));
-const kicked = await g.expect("error");
-assert(kicked.kind === ErrorKind.KICKED, "kicked player told why");
-await g.expectClosed();
-console.log("  ok: kicked player disconnected");
-roster = await f.expect("roster");
-assert(roster.players.length === 1, "host sees the seat freed");
+f.send(clientJoinRoom(code, "fern", 1, "X"));
+const gone = await f.expect("error");
+assert(gone.kind === ErrorKind.ROOM_NOT_FOUND, "room deleted once its last member left");
+f.close();
 
-// --- the room stays joinable after a kick; seats never get reused ---
-const h = await Client.connect(URL);
-await h.expect("hello");
-h.send(clientJoinRoom(kickRoom.code, "heidi", 1, "X"));
-await h.expect("roomJoined");
-roster = await h.expect("roster");
-assert(roster.players.length === 2 && roster.yourIdx === 1, "room joinable after a kick");
-const heidiSeat = roster.players[1].seat;
-assert(heidiSeat === 2, "the kicked seat isn't reissued");
-await f.expect("roster");
+// === cable rooms gather until position 0 links them up ===
 
-// --- a kick racing a departure can't hit the wrong player: Heidi
-// slides into Grace's old position, but Grace's seat just bounces ---
-f.send(clientKickPlayer(graceSeat));
-const staleKick = await f.expect("error");
-assert(staleKick.kind === ErrorKind.MALFORMED, "stale kick bounces off the slid-in player");
-f.send(clientKickPlayer(heidiSeat));
-const kicked2 = await h.expect("error");
-assert(kicked2.kind === ErrorKind.KICKED, "seat-addressed kick hits the intended player");
-await h.expectClosed();
-roster = await f.expect("roster");
-assert(roster.players.length === 1, "host alone again");
-f.send(clientLeave());
-await f.expectClosed();
+/** Drain one roster broadcast from every connected member. */
+async function allRosters(clients: Client[]): Promise<void> {
+  for (const c of clients) await c.expect("roster");
+}
+
+const p0 = await Client.connect(URL);
+await p0.expect("hello");
+p0.send(clientCreateRoom("gina", 1, "X", false)); // cable
+const cable = await p0.expect("roomCreated");
+roster = await p0.expect("roster");
+assert(!roster.wireless, "cable room advertised as such");
+
+const p1 = await Client.connect(URL);
+await p1.expect("hello");
+p1.send(clientJoinRoom(cable.code, "hugh", 1, "X"));
+await p1.expect("roomJoined");
+await allRosters([p1, p0]);
+
+// Everyone ready — and the room just sits there gathering.
+p0.send(clientSetReady(true));
+await allRosters([p0, p1]);
+p1.send(clientSetReady(true));
+await allRosters([p0, p1]);
+p1.send(clientStart());
+const notHostStart = await p1.expect("error");
+assert(notHostStart.kind === ErrorKind.NOT_HOST, "only position 0 links a cable room up");
+
+// A third player joins the gathered, all-ready room: still no merge —
+// this is the 4-player fix, nothing fires until position 0 says so.
+const p2 = await Client.connect(URL);
+await p2.expect("hello");
+p2.send(clientJoinRoom(cable.code, "iris", 1, "X"));
+await p2.expect("roomJoined");
+await allRosters([p2, p0, p1]);
+p0.send(clientStart());
+const notReady = await p0.expect("error");
+assert(notReady.kind === ErrorKind.NOT_EVERYONE_READY, "cable start needs everyone ready");
+p0.send(clientSetReady(true));
+await allRosters([p0, p1, p2]);
+p1.send(clientSetReady(true));
+await allRosters([p0, p1, p2]);
+p2.send(clientSetReady(true));
+await allRosters([p0, p1, p2]);
+
+// The explicit start merges everyone gathered so far.
+p0.send(clientStart());
+const cableStart0 = await p0.expect("starting");
+await p1.expect("starting");
+const cableStart2 = await p2.expect("starting");
+assert(
+  cableStart0.players.length === 3 && cableStart2.yourIdx === 2,
+  "cable room gathered three before linking once",
+);
+p0.send(clientSignal(2, new Uint8Array([5])));
+const cableSig = await p2.expect("signal");
+assert(cableSig.peer === 0 && cableSig.payload[0] === 5, "cable relay rides the merge routing");
+
+// A late fourth joiner sits in the roster (no auto-merge) until
+// position 0 re-links — 4-player, assembled across two starts.
+const p3 = await Client.connect(URL);
+await p3.expect("hello");
+p3.send(clientJoinRoom(cable.code, "jules", 1, "X"));
+await p3.expect("roomJoined");
+await allRosters([p3, p0, p1, p2]);
+for (const c of [p0, p1, p2, p3]) {
+  c.send(clientSetReady(true));
+  await allRosters([p0, p1, p2, p3]);
+}
+p0.send(clientStart());
+const relink0 = await p0.expect("starting");
+const relink3 = await p3.expect("starting");
+await p1.expect("starting");
+await p2.expect("starting");
+assert(
+  relink0.players.length === 4 && relink3.yourIdx === 3,
+  "re-link folds the late joiner in: 4 players linked",
+);
+
+// --- a cable chain holds exactly four ---
+const p4 = await Client.connect(URL);
+await p4.expect("hello");
+p4.send(clientJoinRoom(cable.code, "kate", 1, "X"));
+const chainFull = await p4.expect("error");
+assert(chainFull.kind === ErrorKind.ROOM_FULL, "a fifth GBA doesn't fit a cable chain");
+p4.close();
+for (const c of [p0, p1, p2, p3]) c.close();
+
+// === a wireless room seats one full RFU group: five players ===
+const w0 = await Client.connect(URL);
+await w0.expect("hello");
+w0.send(clientCreateRoom("host", 1, "X", true));
+const group = await w0.expect("roomCreated");
+await w0.expect("roster");
+const flock: Client[] = [w0];
+for (let n = 1; n < 5; n++) {
+  const c = await Client.connect(URL);
+  await c.expect("hello");
+  c.send(clientJoinRoom(group.code, `p${n}`, 1, "X"));
+  await c.expect("roomJoined");
+  flock.push(c);
+  for (const member of flock) {
+    const r = await member.expect("roster");
+    if (n === 4 && member === c) {
+      assert(r.players.length === 5, "the fifth player seats (host + 4 clients)");
+    }
+  }
+}
+const w5 = await Client.connect(URL);
+await w5.expect("hello");
+w5.send(clientJoinRoom(group.code, "p5", 1, "X"));
+const groupFull = await w5.expect("error");
+assert(groupFull.kind === ErrorKind.ROOM_FULL, "a sixth doesn't fit the group");
+w5.close();
+for (const c of flock) c.close();
+
+// === wireless rooms refuse the explicit start ===
+const w = await Client.connect(URL);
+await w.expect("hello");
+w.send(clientCreateRoom("wren", 1, "X", true));
+await w.expect("roomCreated");
+await w.expect("roster");
+w.send(clientStart());
+const wStart = await w.expect("error");
+assert(wStart.kind === ErrorKind.MALFORMED, "wireless rooms merge on their own — start bounced");
+w.close();
 
 console.log("all good ✓");

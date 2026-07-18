@@ -5,7 +5,7 @@
 //! each edge finishes with a version handshake over its reliable control
 //! channel (opened-barrier first — the web has no blocking first send).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use anyhow::Context as _;
 use futures::stream::{FuturesUnordered, SelectAll};
@@ -45,15 +45,19 @@ struct Pending {
 }
 
 /// Build the mesh over the signaling socket still connected to the
-/// started room.
+/// room. The room's life goes on while a mesh comes up — a join can
+/// reset ready bits, a kick can land — so messages that belong to the
+/// lobby loop rather than this merge (Roster, Starting, Error) are set
+/// aside in `stray` for it to replay afterwards.
 pub async fn build(
     socket: &mut SignalSocket,
     local_player: usize,
     num_players: usize,
     ice_servers: &[IceServer],
+    stray: &mut VecDeque<server_message::Msg>,
 ) -> anyhow::Result<Vec<PeerLink>> {
     futures::select! {
-        links = build_inner(socket, local_player, num_players, ice_servers).fuse() => links,
+        links = build_inner(socket, local_player, num_players, ice_servers, stray).fuse() => links,
         _ = TimeoutFuture::new(MESH_TIMEOUT_MS).fuse() => {
             anyhow::bail!("timed out connecting to peers")
         }
@@ -65,6 +69,7 @@ async fn build_inner(
     local_player: usize,
     num_players: usize,
     ice_servers: &[IceServer],
+    stray: &mut VecDeque<server_message::Msg>,
 ) -> anyhow::Result<Vec<PeerLink>> {
     let mut pendings: HashMap<usize, Pending> = HashMap::new();
     // Per-peer connection events (trickled candidates, failures), merged.
@@ -198,12 +203,17 @@ async fn build_inner(
                     server_message::Msg::PeerLeft(left) => {
                         let player = left.player_idx as usize;
                         // Harmless if that edge is already up (the peer
-                        // finished its mesh and left the server); only
+                        // finished its mesh and left the room); only
                         // an edge that stays pending past the grace
                         // window means the peer really died.
                         if !done.contains_key(&player) {
                             departed.entry(player).or_insert_with(js_sys::Date::now);
                         }
+                    }
+                    msg @ (server_message::Msg::Roster(_)
+                    | server_message::Msg::Starting(_)
+                    | server_message::Msg::Error(_)) => {
+                        stray.push_back(msg);
                     }
                     _ => {}
                 }

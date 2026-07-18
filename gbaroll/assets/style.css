@@ -1373,6 +1373,12 @@ main.settings-main .card:last-child {
     padding: 2px 0 0 4px;
 }
 
+/* The connected card's Stats/Room switcher: the shell's segmented tab
+   look, stretched so the two faces split the track evenly. */
+.tele-tabs .btn.tab {
+    flex: 1;
+}
+
 .tele-head .btn {
     flex: none;
     margin: -4px -4px 0 0;
