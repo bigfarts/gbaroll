@@ -17,7 +17,7 @@ use crate::session::{SessionEnd, SessionKind};
 pub fn SessionView() -> Element {
     let Ctx {
         runtime,
-        config,
+        mut config,
         library,
         mut library_rev,
         mut selected_save,
@@ -44,12 +44,26 @@ pub fn SessionView() -> Element {
         use_drop(move || {
             let mut rt = runtime.borrow_mut();
             rt.detach_canvas();
-            // A "(fresh save)" session that persisted SRAM created a
-            // real saves/ file — move the picker onto it so the next
-            // Play continues it instead of booting fresh again.
-            if selected_save.peek().is_none() {
-                if let Some(name) = rt.take_persisted_save() {
-                    selected_save.set(Some(name));
+            if let Some(target) = rt.take_persisted_save() {
+                // A "(fresh save)" session that persisted SRAM created
+                // a real save file — move the picker onto it so the
+                // next Play continues it instead of booting fresh
+                // again.
+                if selected_save.peek().is_none() {
+                    selected_save.set(Some(target.file.clone()));
+                }
+                // A game's first-ever save becomes its default (the
+                // index still predates this session's write-back).
+                let had_saves = library
+                    .peek()
+                    .as_ref()
+                    .and_then(|v| v.as_ref())
+                    .and_then(|(_, saves)| saves.get(&target.game))
+                    .is_some_and(|list| !list.is_empty());
+                if !had_saves {
+                    config.with_mut(|c| {
+                        c.default_saves.insert(target.game, target.file);
+                    });
                 }
             }
             drop(rt);

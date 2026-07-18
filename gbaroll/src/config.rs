@@ -2,6 +2,8 @@
 //! native client exposed are gone — ROMs and saves live in OPFS (see
 //! `storage`), which has no user-facing paths.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::platform::input::Mapping;
@@ -35,6 +37,10 @@ pub struct Config {
     pub integer_scaling: bool,
     /// The library's last-picked game (CRC32), restored on load.
     pub last_game: Option<u32>,
+    /// Each game's default save (game CRC32 → file name inside its
+    /// `saves/<crc32>/` directory), auto-picked when the game is
+    /// selected. A game's first-ever save defaults itself.
+    pub default_saves: HashMap<u32, String>,
     /// What's on the machine's link port: the multi-cable or the
     /// wireless adapter. Applied at game launch (the peripheral is
     /// plugged in before power-on), and announced to peers when this
@@ -53,6 +59,7 @@ impl Default for Config {
             volume: 1.0,
             integer_scaling: true,
             last_game: None,
+            default_saves: HashMap::new(),
             link: crate::session::LinkKind::default(),
             mapping: Mapping::default(),
         }

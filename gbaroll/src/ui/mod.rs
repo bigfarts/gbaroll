@@ -47,9 +47,14 @@ struct Ctx {
     /// `Some(None)` when the browser has no OPFS.
     storage: Resource<Option<Storage>>,
     dat: Resource<DatIndex>,
-    /// Library scan + save list; `None` until OPFS and the DAT are up.
-    library: Resource<Option<(Library, Vec<String>)>>,
-    /// The save picker's choice for the next boot (`None` = fresh).
+    /// Library scan + per-game save index; `None` until OPFS and the
+    /// DAT are up.
+    library: Resource<Option<(Library, crate::library::SaveIndex)>>,
+    /// The library's picked game (CRC32) — whose saves the save pane
+    /// shows, and where dropped save files import to.
+    selected_game: Signal<Option<u32>>,
+    /// The save picker's choice for the next boot (`None` = fresh),
+    /// a name inside the selected game's save directory.
     selected_save: Signal<Option<String>>,
 }
 

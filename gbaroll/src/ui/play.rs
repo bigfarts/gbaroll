@@ -1,7 +1,9 @@
-//! The Play tab: pick a game, pick a save, hit Play. The library and
-//! the saves are twin OPFS-backed pick-lists with import, search,
-//! rename (saves), and delete; action feedback flashes inline next to
-//! whatever triggered it.
+//! The Play tab: pick a game, pick one of *its* saves, hit Play. The
+//! library and the saves are twin OPFS-backed pick-lists with import,
+//! search, rename (saves), and delete; saves are namespaced per game
+//! (`saves/<crc32>/`), the save pane only ever shows the selected
+//! game's, and a starred save is the game's default pick. Action
+//! feedback flashes inline next to whatever triggered it.
 
 use dioxus::prelude::*;
 
@@ -45,8 +47,34 @@ pub(crate) static SAVE_IMPORT_FLASH: GlobalSignal<Option<Flash>> = Signal::globa
 /// side unless only saves imported. When nothing landed at all the
 /// import *failed*, and the failure reports on `fail_slot` — the pane
 /// whose picker ran, or the library for area-wide drops.
-pub(crate) fn import_flashes(roms: u32, saves: u32, skipped: u32, fail_slot: Signal<Option<Flash>>) {
+pub(crate) fn import_flashes(
+    counts: crate::web::ImportCounts,
+    fail_slot: Signal<Option<Flash>>,
+) {
+    let crate::web::ImportCounts {
+        roms,
+        saves,
+        skipped,
+        saves_without_game,
+    } = counts;
+    // Saves offered with no game picked had nowhere to land; the save
+    // pane says what to do about it.
+    if saves_without_game > 0 {
+        flash(
+            SAVE_IMPORT_FLASH.signal(),
+            "Pick a game first, then import its saves",
+            false,
+            5000,
+        );
+    }
     if roms == 0 && saves == 0 {
+        // Homeless saves already explained themselves above.
+        if saves_without_game > 0 {
+            if skipped > 0 {
+                flash(fail_slot, format!("Skipped {skipped}"), false, 5000);
+            }
+            return;
+        }
         let msg = if skipped > 0 {
             format!("Import failed, skipped {skipped}")
         } else {
@@ -88,24 +116,6 @@ pub(crate) fn FlashText(flash: Flash) -> Element {
     }
 }
 
-/// The save the picker auto-selects for a game: the one whose stem is
-/// the game's display name (the write-back default).
-fn matching_save(saves: &[String], display: &str) -> Option<String> {
-    saves
-        .iter()
-        .find(|s| stem_of(s).eq_ignore_ascii_case(display))
-        .cloned()
-}
-
-/// Split a save's file name around its final dot.
-fn stem_of(name: &str) -> &str {
-    name.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(name)
-}
-
-fn ext_of(name: &str) -> &str {
-    name.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("sav")
-}
-
 #[component]
 pub fn PlayScreen() -> Element {
     let Ctx {
@@ -114,16 +124,16 @@ pub fn PlayScreen() -> Element {
         mut library_rev,
         storage: storage_res,
         library,
+        mut selected_game,
         mut selected_save,
         ..
     } = use_ctx();
 
     let mut search = use_signal(String::new);
     let mut save_search = use_signal(String::new);
-    // Launching is two picks and a click: pick a game (auto-picks its
-    // matching save), adjust the save if wanted, hit Play. The last
-    // pick is remembered across loads.
-    let mut selected_game = use_signal(|| config.peek().last_game);
+    // Launching is two picks and a click: pick a game (its default
+    // save comes along), adjust the save if wanted, hit Play. The
+    // last pick is remembered across loads.
     // Inline action feedback slots.
     let rom_import_flash = ROM_IMPORT_FLASH.signal();
     let save_import_flash = SAVE_IMPORT_FLASH.signal();
@@ -131,7 +141,7 @@ pub fn PlayScreen() -> Element {
     let save_flash = use_signal(|| Option::<Flash>::None);
     let launch_flash = use_signal(|| Option::<Flash>::None);
 
-    // The remembered pick restores its matching save once the library
+    // The remembered pick restores its default save once the library
     // arrives (only if nothing else was chosen yet).
     let mut restored = use_signal(|| false);
     use_effect(move || {
@@ -139,17 +149,19 @@ pub fn PlayScreen() -> Element {
             return;
         }
         let guard = library.read();
-        let Some(Some((lib, saves))) = guard.as_ref() else {
+        let Some(Some((_, saves))) = guard.as_ref() else {
             return;
         };
         restored.set(true);
         if selected_save.peek().is_none() {
-            if let Some(info) =
-                (*selected_game.peek()).and_then(|crc| lib.by_crc32(crc))
-            {
-                if let Some(matched) = matching_save(saves, info.display_name()) {
-                    selected_save.set(Some(matched));
-                }
+            if let Some(crc32) = *selected_game.peek() {
+                let default = config
+                    .peek()
+                    .default_saves
+                    .get(&crc32)
+                    .filter(|name| saves.get(&crc32).is_some_and(|list| list.contains(name)))
+                    .cloned();
+                selected_save.set(default);
             }
         }
     });
@@ -168,15 +180,29 @@ pub fn PlayScreen() -> Element {
         if stem.is_empty() {
             return;
         }
-        let to = format!("{stem}.{}", ext_of(&save));
+        let Some(crc32) = *selected_game.peek() else {
+            return;
+        };
+        let to = format!("{stem}.{}", library::ext_of(&save));
         let storage = storage_res.read().clone().flatten();
         spawn(async move {
             let Some(storage) = storage else { return };
-            match storage::rename(storage.saves(), &save, &to).await {
+            let renamed = match storage.save_dir(crc32).await {
+                Ok(dir) => storage::rename(&dir, &save, &to).await,
+                Err(e) => Err(e),
+            };
+            match renamed {
                 Ok(()) => {
-                    // The picker follows the rename.
+                    // The picker and the default marker follow.
                     if selected_save.read().as_deref() == Some(save.as_str()) {
-                        selected_save.set(Some(to));
+                        selected_save.set(Some(to.clone()));
+                    }
+                    if config.peek().default_saves.get(&crc32).map(String::as_str)
+                        == Some(save.as_str())
+                    {
+                        config.with_mut(|c| {
+                            c.default_saves.insert(crc32, to.clone());
+                        });
                     }
                 }
                 Err(e) => flash(
@@ -191,9 +217,9 @@ pub fn PlayScreen() -> Element {
         });
     };
 
-    let (scanned, roms, saves) = match library.read().as_ref() {
+    let (scanned, roms, save_index) = match library.read().as_ref() {
         Some(Some((lib, saves))) => (true, lib.roms.clone(), saves.clone()),
-        _ => (false, Vec::new(), Vec::new()),
+        _ => (false, Vec::new(), library::SaveIndex::default()),
     };
     let opfs_down = matches!(storage_res.read().as_ref(), Some(None));
 
@@ -208,16 +234,24 @@ pub fn PlayScreen() -> Element {
         })
         .cloned()
         .collect();
-    let save_needle = save_search.read().to_ascii_lowercase();
-    let filtered_saves: Vec<String> = saves
-        .iter()
-        .filter(|s| save_needle.is_empty() || s.to_ascii_lowercase().contains(&save_needle))
-        .cloned()
-        .collect();
 
     let selected_info: Option<RomInfo> = selected_game
         .read()
         .and_then(|crc| roms.iter().find(|r| r.crc32 == crc).cloned());
+
+    // The save pane shows only the selected game's saves.
+    let game_crc32 = selected_info.as_ref().map(|r| r.crc32);
+    let game_saves: Vec<String> = game_crc32
+        .and_then(|crc| save_index.get(&crc).cloned())
+        .unwrap_or_default();
+    let default_name: Option<String> =
+        game_crc32.and_then(|crc| config.read().default_saves.get(&crc).cloned());
+    let save_needle = save_search.read().to_ascii_lowercase();
+    let filtered_saves: Vec<String> = game_saves
+        .iter()
+        .filter(|s| save_needle.is_empty() || s.to_ascii_lowercase().contains(&save_needle))
+        .cloned()
+        .collect();
 
     rsx! {
         section { class: "card",
@@ -265,14 +299,18 @@ pub fn PlayScreen() -> Element {
                             multiple: true,
                             onchange: move |evt| {
                                 let storage = storage_res.read().clone().flatten();
+                                // iOS's unfiltered picker can hand this
+                                // importer saves too; they land with the
+                                // selected game like everywhere else.
+                                let dest = game_crc32;
                                 let files = evt.files();
                                 // Re-picking the same file must fire again.
                                 crate::web::reset_file_input(&evt);
                                 async move {
                                     let Some(storage) = storage else { return };
-                                    let (r, s, skipped) =
-                                        crate::web::import_files(&storage, files).await;
-                                    import_flashes(r, s, skipped, rom_import_flash);
+                                    let counts =
+                                        crate::web::import_files(&storage, files, dest).await;
+                                    import_flashes(counts, rom_import_flash);
                                     *library_rev.write() += 1;
                                 }
                             },
@@ -301,18 +339,23 @@ pub fn PlayScreen() -> Element {
                                     name: "game-pick",
                                     class: "pick-radio",
                                     checked: *selected_game.read() == Some(rom.crc32),
-                                    // Picking the game brings its matching
-                                    // save along (same stem as the display
-                                    // name); no match = fresh save.
+                                    // Picking the game brings its default
+                                    // save along; no default = fresh save.
                                     onchange: {
-                                        let crc = rom.crc32;
-                                        let display = rom.display_name().to_string();
-                                        let saves = saves.clone();
+                                        let crc32 = rom.crc32;
+                                        let game_saves =
+                                            save_index.get(&crc32).cloned().unwrap_or_default();
                                         move |_| {
-                                            selected_game.set(Some(crc));
-                                            selected_save.set(matching_save(&saves, &display));
+                                            selected_game.set(Some(crc32));
+                                            let default = config
+                                                .peek()
+                                                .default_saves
+                                                .get(&crc32)
+                                                .filter(|name| game_saves.contains(name))
+                                                .cloned();
+                                            selected_save.set(default);
                                             // Remembered for the next load.
-                                            config.with_mut(|c| c.last_game = Some(crc));
+                                            config.with_mut(|c| c.last_game = Some(crc32));
                                         }
                                     },
                                 }
@@ -386,66 +429,91 @@ pub fn PlayScreen() -> Element {
             div { class: "card-head",
                 div {
                     h2 { "Save data" }
+                    // Whose saves these are — the pane only ever shows
+                    // the selected game's.
+                    if let Some(info) = &selected_info {
+                        p { class: "sub", "{info.display_name()}" }
+                    }
                 }
             }
-            input {
-                class: "search",
-                placeholder: "Search saves…",
-                value: "{save_search}",
-                spellcheck: "false",
-                autocomplete: "off",
-                oninput: move |evt: FormEvent| save_search.set(evt.value()),
+            if selected_info.is_some() {
+                input {
+                    class: "search",
+                    placeholder: "Search saves…",
+                    value: "{save_search}",
+                    spellcheck: "false",
+                    autocomplete: "off",
+                    oninput: move |evt: FormEvent| save_search.set(evt.value()),
+                }
             }
             if let Some(f) = save_flash.read().clone() {
                 p { class: "sub", FlashText { flash: f } }
             }
             div { class: "save-list",
-                // The importer leads the list as a ghost row; while
-                // flashing it wears the result's tone.
-                label {
-                    class: "pick-row ghost-add file-btn",
-                    class: if save_import_flash.read().as_ref().is_some_and(|f| f.ok) { "success" },
-                    class: if save_import_flash.read().as_ref().is_some_and(|f| !f.ok) { "danger" },
-                    if let Some(f) = save_import_flash.read().clone() {
-                        FlashText { flash: f }
-                    } else {
-                        icons::Upload {}
-                        "Import saves…"
-                    }
-                    input {
-                        r#type: "file",
-                        // Unfiltered on iOS — see the ROM picker.
-                        accept: if !crate::web::is_ios() { ".sav,.sa1,.srm" },
-                        multiple: true,
-                        onchange: move |evt| {
-                            let storage = storage_res.read().clone().flatten();
-                            let files = evt.files();
-                            // Re-picking the same file must fire again.
-                            crate::web::reset_file_input(&evt);
-                            async move {
-                                let Some(storage) = storage else { return };
-                                let (r, s, skipped) =
-                                    crate::web::import_files(&storage, files).await;
-                                import_flashes(r, s, skipped, save_import_flash);
-                                *library_rev.write() += 1;
-                            }
-                        },
+                // Saves are per-game: with no game picked there is
+                // nothing to list, and imports have nowhere to land.
+                if selected_info.is_none() {
+                    div { class: "empty",
+                        p { "No game picked" }
+                        p { class: "sub", "Each game keeps its own saves — pick one to see them." }
+                        // A save dropped in this state flashes its
+                        // refusal here — the import row that usually
+                        // hosts the slot isn't rendered.
+                        if let Some(f) = save_import_flash.read().clone() {
+                            p { class: "sub", FlashText { flash: f } }
+                        }
                     }
                 }
-                // The same radio-group widget as the game library; a
-                // fresh save is its own row rather than a dropdown
-                // special case.
-                div {
-                    class: if selected_save.read().is_none() { "pick-row selected" } else { "pick-row" },
-                    label { class: "pick-label",
-                        input {
-                            r#type: "radio",
-                            name: "save-pick",
-                            class: "pick-radio",
-                            checked: selected_save.read().is_none(),
-                            onchange: move |_| selected_save.set(None),
+                if selected_info.is_some() {
+                    // The importer leads the list as a ghost row; while
+                    // flashing it wears the result's tone.
+                    label {
+                        class: "pick-row ghost-add file-btn",
+                        class: if save_import_flash.read().as_ref().is_some_and(|f| f.ok) { "success" },
+                        class: if save_import_flash.read().as_ref().is_some_and(|f| !f.ok) { "danger" },
+                        if let Some(f) = save_import_flash.read().clone() {
+                            FlashText { flash: f }
+                        } else {
+                            icons::Upload {}
+                            "Import saves…"
                         }
-                        span { class: "sub", "(fresh save)" }
+                        input {
+                            r#type: "file",
+                            // Unfiltered on iOS — see the ROM picker.
+                            accept: if !crate::web::is_ios() { ".sav,.sa1,.srm" },
+                            multiple: true,
+                            onchange: move |evt| {
+                                let storage = storage_res.read().clone().flatten();
+                                // Into the selected game's namespace.
+                                let dest = game_crc32;
+                                let files = evt.files();
+                                // Re-picking the same file must fire again.
+                                crate::web::reset_file_input(&evt);
+                                async move {
+                                    let Some(storage) = storage else { return };
+                                    let counts =
+                                        crate::web::import_files(&storage, files, dest).await;
+                                    import_flashes(counts, save_import_flash);
+                                    *library_rev.write() += 1;
+                                }
+                            },
+                        }
+                    }
+                    // The same radio-group widget as the game library; a
+                    // fresh save is its own row rather than a dropdown
+                    // special case.
+                    div {
+                        class: if selected_save.read().is_none() { "pick-row selected" } else { "pick-row" },
+                        label { class: "pick-label",
+                            input {
+                                r#type: "radio",
+                                name: "save-pick",
+                                class: "pick-radio",
+                                checked: selected_save.read().is_none(),
+                                onchange: move |_| selected_save.set(None),
+                            }
+                            span { class: "sub", "(fresh save)" }
+                        }
                     }
                 }
                 for save in filtered_saves {
@@ -476,7 +544,7 @@ pub fn PlayScreen() -> Element {
                                         onclick: move |evt: MouseEvent| evt.stop_propagation(),
                                         oninput: move |evt: FormEvent| rename_value.set(evt.value()),
                                     }
-                                    code { {format!(".{}", ext_of(&save))} }
+                                    code { {format!(".{}", library::ext_of(&save))} }
                                 }
                                 div { class: "row-actions",
                                     button {
@@ -509,22 +577,43 @@ pub fn PlayScreen() -> Element {
                                         move |evt: MouseEvent| {
                                             evt.stop_propagation();
                                             let storage = storage_res.read().clone().flatten();
+                                            let crc32 = *selected_game.peek();
                                             let save = save.clone();
                                             async move {
-                                                let Some(storage) = storage else { return };
-                                                if let Err(e) =
-                                                    storage::delete(storage.saves(), &save).await
-                                                {
+                                                let (Some(storage), Some(crc32)) = (storage, crc32)
+                                                else {
+                                                    return;
+                                                };
+                                                let deleted = match storage.save_dir(crc32).await {
+                                                    Ok(dir) => storage::delete(&dir, &save).await,
+                                                    Err(e) => Err(e),
+                                                };
+                                                if let Err(e) = deleted {
                                                     flash(
                                                         save_flash,
                                                         format!("couldn't delete {save}: {e}"),
                                                         false,
                                                         5000,
                                                     );
-                                                } else if selected_save.read().as_deref()
-                                                    == Some(save.as_str())
-                                                {
-                                                    selected_save.set(None);
+                                                } else {
+                                                    if selected_save.read().as_deref()
+                                                        == Some(save.as_str())
+                                                    {
+                                                        selected_save.set(None);
+                                                    }
+                                                    // A deleted default is no
+                                                    // default at all.
+                                                    if config
+                                                        .peek()
+                                                        .default_saves
+                                                        .get(&crc32)
+                                                        .map(String::as_str)
+                                                        == Some(save.as_str())
+                                                    {
+                                                        config.with_mut(|c| {
+                                                            c.default_saves.remove(&crc32);
+                                                        });
+                                                    }
                                                 }
                                                 pending_save_delete.set(None);
                                                 *library_rev.write() += 1;
@@ -557,6 +646,41 @@ pub fn PlayScreen() -> Element {
                                 code { "{save}" }
                             }
                             div { class: "row-actions",
+                                // The star: this save is the game's
+                                // default — the pick that comes along
+                                // when the game is selected. Click
+                                // again to clear (back to fresh).
+                                button {
+                                    class: if default_name.as_deref() == Some(save.as_str()) {
+                                        "btn ghost icon-btn default-btn is-default"
+                                    } else {
+                                        "btn ghost icon-btn default-btn"
+                                    },
+                                    title: if default_name.as_deref() == Some(save.as_str()) {
+                                        "Default save — click to clear"
+                                    } else {
+                                        "Make default"
+                                    },
+                                    onclick: {
+                                        let save = save.clone();
+                                        move |evt: MouseEvent| {
+                                            evt.stop_propagation();
+                                            let Some(crc32) = *selected_game.peek() else {
+                                                return;
+                                            };
+                                            config.with_mut(|c| {
+                                                if c.default_saves.get(&crc32).map(String::as_str)
+                                                    == Some(save.as_str())
+                                                {
+                                                    c.default_saves.remove(&crc32);
+                                                } else {
+                                                    c.default_saves.insert(crc32, save.clone());
+                                                }
+                                            });
+                                        }
+                                    },
+                                    icons::Star {}
+                                }
                                 button {
                                     class: "btn ghost icon-btn",
                                     title: "Rename",
@@ -564,7 +688,7 @@ pub fn PlayScreen() -> Element {
                                         let save = save.clone();
                                         move |evt: MouseEvent| {
                                             evt.stop_propagation();
-                                            rename_value.set(stem_of(&save).to_string());
+                                            rename_value.set(library::stem_of(&save).to_string());
                                             rename_target.set(Some(save.clone()));
                                             pending_save_delete.set(None);
                                         }
@@ -579,12 +703,23 @@ pub fn PlayScreen() -> Element {
                                         move |evt: MouseEvent| {
                                             evt.stop_propagation();
                                             let storage = storage_res.read().clone().flatten();
+                                            let crc32 = *selected_game.peek();
                                             let save = save.clone();
                                             async move {
-                                                let Some(storage) = storage else { return };
-                                                match storage::read(storage.saves(), &save).await {
-                                                    Ok(Some(bytes)) => crate::web::download_bytes(&save, &bytes),
-                                                    _ => flash(
+                                                let (Some(storage), Some(crc32)) = (storage, crc32)
+                                                else {
+                                                    return;
+                                                };
+                                                let bytes = match storage.save_dir(crc32).await {
+                                                    Ok(dir) => storage::read(&dir, &save)
+                                                        .await
+                                                        .ok()
+                                                        .flatten(),
+                                                    Err(_) => None,
+                                                };
+                                                match bytes {
+                                                    Some(bytes) => crate::web::download_bytes(&save, &bytes),
+                                                    None => flash(
                                                         save_flash,
                                                         format!("couldn't read {save}"),
                                                         false,
@@ -669,13 +804,17 @@ pub fn PlayScreen() -> Element {
                                     }
                                 };
                                 let save = match &save_name {
-                                    Some(name) => {
-                                        storage::read(storage.saves(), name).await.ok().flatten()
-                                    }
+                                    Some(name) => match storage.save_dir(info.crc32).await {
+                                        Ok(dir) => {
+                                            storage::read(&dir, name).await.ok().flatten()
+                                        }
+                                        Err(_) => None,
+                                    },
                                     None => None,
                                 };
-                                // SRAM writes back into the picked save, or a
-                                // fresh "<name>.sav" the first time it persists.
+                                // SRAM writes back into the picked save (in
+                                // the game's own directory), or a fresh
+                                // "<name>.sav" the first time it persists.
                                 let save_file = save_name.clone().unwrap_or_else(|| {
                                     format!("{}.sav", info.display_name())
                                 });

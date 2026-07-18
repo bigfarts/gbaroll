@@ -50,10 +50,12 @@ static FONT_MONO_BOLD: Asset = asset!(
 
 #[component]
 pub fn App() -> Element {
-    let config = use_hook(|| Signal::new(Config::load()));
+    let mut config = use_hook(|| Signal::new(Config::load()));
     let runtime = use_hook(Runtime::install);
     // Bumped to rescan the library after imports/deletes.
     let library_rev = use_signal(|| 0u64);
+    // The last pick is remembered across loads.
+    let selected_game = use_signal(|| config.peek().last_game);
     let selected_save = use_signal(|| Option::<String>::None);
 
     let storage = use_resource(|| async {
@@ -84,7 +86,16 @@ pub fn App() -> Element {
             match (storage.flatten(), dat) {
                 (Some(s), Some(d)) => {
                     let lib = Library::scan(&s, &d).await;
-                    let saves = library::list_saves(&s).await;
+                    let (saves, adopted) = library::scan_saves(&s, &lib).await;
+                    // A migrated legacy save was the old auto-pick for
+                    // its game, so it becomes the game's default.
+                    if !adopted.is_empty() {
+                        config.with_mut(|c| {
+                            for (crc32, name) in adopted {
+                                c.default_saves.entry(crc32).or_insert(name);
+                            }
+                        });
+                    }
                     Some((lib, saves))
                 }
                 _ => None,
@@ -99,6 +110,7 @@ pub fn App() -> Element {
         storage,
         dat,
         library,
+        selected_game,
         selected_save,
     });
 
@@ -165,6 +177,8 @@ fn Shell() -> Element {
         mut config,
         storage,
         mut library_rev,
+        library,
+        selected_game,
         ..
     } = use_ctx();
     let mut tab = use_signal(Tab::default);
@@ -238,11 +252,21 @@ fn Shell() -> Element {
                     evt.prevent_default();
                     drop_hover.set(false);
                     let storage = storage.read().clone().flatten();
+                    // Dropped saves land in the selected game's
+                    // namespace — only if that game is really in the
+                    // library (the remembered pick can be stale).
+                    let dest = selected_game.read().filter(|crc32| {
+                        library
+                            .read()
+                            .as_ref()
+                            .and_then(|v| v.as_ref())
+                            .is_some_and(|(lib, _)| lib.by_crc32(*crc32).is_some())
+                    });
                     let files = evt.files();
                     async move {
                         let Some(storage) = storage else { return };
-                        let (r, s, skipped) = crate::web::import_files(&storage, files).await;
-                        play::import_flashes(r, s, skipped, play::ROM_IMPORT_FLASH.signal());
+                        let counts = crate::web::import_files(&storage, files, dest).await;
+                        play::import_flashes(counts, play::ROM_IMPORT_FLASH.signal());
                         *library_rev.write() += 1;
                     }
                 },

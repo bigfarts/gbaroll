@@ -247,17 +247,34 @@ async fn read_file(file: &dioxus::html::FileData) -> anyhow::Result<Vec<u8>> {
     Ok(js_sys::Uint8Array::new(&buf).to_vec())
 }
 
-/// Import picked files into OPFS, routed by extension (ROMs vs saves).
-/// Returns (roms, saves, skipped) counts.
-pub async fn import_files(storage: &Storage, files: Vec<dioxus::html::FileData>) -> (u32, u32, u32) {
-    let (mut roms, mut saves, mut skipped) = (0, 0, 0);
+/// What an import pass did: files landed per kind, files skipped, and
+/// saves that had no game to land in.
+#[derive(Default, Clone, Copy)]
+pub struct ImportCounts {
+    pub roms: u32,
+    pub saves: u32,
+    pub skipped: u32,
+    /// Saves offered while no game was selected — they need a
+    /// `saves/<crc32>/` directory to land in, so they're refused
+    /// rather than guessed.
+    pub saves_without_game: u32,
+}
+
+/// Import picked files into OPFS, routed by extension: ROMs into the
+/// library, saves into `save_game`'s directory.
+pub async fn import_files(
+    storage: &Storage,
+    files: Vec<dioxus::html::FileData>,
+    save_game: Option<u32>,
+) -> ImportCounts {
+    let mut counts = ImportCounts::default();
     for file in files {
         let name = file.name();
         let bytes = match read_file(&file).await {
             Ok(b) => b,
             Err(e) => {
                 log::error!("couldn't read {name}: {e:?}");
-                skipped += 1;
+                counts.skipped += 1;
                 continue;
             }
         };
@@ -266,7 +283,7 @@ pub async fn import_files(storage: &Storage, files: Vec<dioxus::html::FileData>)
                 Ok(info) => info,
                 Err(e) => {
                     log::warn!("not importing {name}: {e}");
-                    skipped += 1;
+                    counts.skipped += 1;
                     continue;
                 }
             };
@@ -276,10 +293,10 @@ pub async fn import_files(storage: &Storage, files: Vec<dioxus::html::FileData>)
             // the UI never needs to show a filename.
             let stored = library::normalized_file_name(&info);
             match storage::write(storage.roms(), &stored, &bytes).await {
-                Ok(()) => roms += 1,
+                Ok(()) => counts.roms += 1,
                 Err(e) => {
                     log::error!("couldn't import {name}: {e}");
-                    skipped += 1;
+                    counts.skipped += 1;
                 }
             }
         } else if library::has_extension(&name, SAVE_EXTENSIONS) {
@@ -287,14 +304,25 @@ pub async fn import_files(storage: &Storage, files: Vec<dioxus::html::FileData>)
             // emulator save footers.
             if bytes.len() > 512 * 1024 {
                 log::warn!("not importing {name}: save file too large");
-                skipped += 1;
+                counts.skipped += 1;
                 continue;
             }
-            match storage::write(storage.saves(), &name, &bytes).await {
-                Ok(()) => saves += 1,
+            // Saves are namespaced per game; the import lands in the
+            // selected game's directory.
+            let Some(crc32) = save_game else {
+                log::warn!("not importing {name}: no game selected to receive it");
+                counts.saves_without_game += 1;
+                continue;
+            };
+            let result = match storage.save_dir(crc32).await {
+                Ok(dir) => storage::write(&dir, &name, &bytes).await,
+                Err(e) => Err(e),
+            };
+            match result {
+                Ok(()) => counts.saves += 1,
                 Err(e) => {
                     log::error!("couldn't import {name}: {e}");
-                    skipped += 1;
+                    counts.skipped += 1;
                 }
             }
         } else if let Ok(info) = library::rom_info(&name, &bytes) {
@@ -303,18 +331,18 @@ pub async fn import_files(storage: &Storage, files: Vec<dioxus::html::FileData>)
             // handing files over with mangled names.
             let stored = library::normalized_file_name(&info);
             match storage::write(storage.roms(), &stored, &bytes).await {
-                Ok(()) => roms += 1,
+                Ok(()) => counts.roms += 1,
                 Err(e) => {
                     log::error!("couldn't import {name}: {e}");
-                    skipped += 1;
+                    counts.skipped += 1;
                 }
             }
         } else {
             log::warn!("not importing {name}: unrecognized extension");
-            skipped += 1;
+            counts.skipped += 1;
         }
     }
-    (roms, saves, skipped)
+    counts
 }
 
 /// Offer a byte blob as a download (save export).

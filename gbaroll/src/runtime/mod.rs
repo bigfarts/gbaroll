@@ -135,13 +135,14 @@ pub struct Runtime {
     storage: Option<crate::storage::Storage>,
     /// The telemetry panel's sample ring, captured per netplay frame.
     metric_history: std::collections::VecDeque<crate::session::MetricSample>,
-    /// The saves/ file the running cart persists into, chosen at boot;
-    /// survives plug-in/unplug swaps (same cart), cleared on close.
-    save_file: Option<String>,
-    /// The saves/ file SRAM last actually persisted into, kept across
-    /// close so the UI can move a "(fresh save)" pick onto the file the
-    /// session created. Taken by [`Self::take_persisted_save`].
-    last_persisted_save: Option<String>,
+    /// Where the running cart persists, chosen at boot; survives
+    /// plug-in/unplug swaps (same cart), cleared on close.
+    save_target: Option<SaveTarget>,
+    /// Where SRAM last actually persisted, kept across close so the UI
+    /// can move a "(fresh save)" pick onto the file the session created
+    /// (and default a game's first save). Taken by
+    /// [`Self::take_persisted_save`].
+    last_persisted_save: Option<SaveTarget>,
     /// CRC of the last persisted SRAM, so the autosave skips no-ops.
     saved_crc: Option<u32>,
     last_autosave_ms: f64,
@@ -155,6 +156,16 @@ pub struct Runtime {
     /// Set while the pump runs — the keyboard handlers and UI callbacks
     /// re-borrow the Runtime, and anything that could re-enter must not.
     _pumping: bool,
+}
+
+/// Where a cart's SRAM persists: a file inside its game's
+/// `saves/<crc32>/` directory.
+#[derive(Clone)]
+pub struct SaveTarget {
+    /// The game's CRC32 — which per-game save directory.
+    pub game: u32,
+    /// The file name inside that directory.
+    pub file: String,
 }
 
 struct CanvasHooks {
@@ -191,7 +202,7 @@ impl Runtime {
             metric_history: std::collections::VecDeque::with_capacity(
                 crate::session::HISTORY_LEN,
             ),
-            save_file: None,
+            save_target: None,
             last_persisted_save: None,
             saved_crc: None,
             last_autosave_ms: 0.0,
@@ -275,9 +286,9 @@ impl Runtime {
 
     /// Boot a fresh solo session from ROM bytes. The caller must have
     /// ensured the audio sink exists (user-gesture requirement).
-    /// `save_file` is the saves/ name the cart persists back into
-    /// (write-back on quit/unplug + a 60s autosave); `None` disables
-    /// persistence (the test ROM).
+    /// `save_file` is the name (inside the game's own save directory)
+    /// the cart persists back into (write-back on quit/unplug + a 60s
+    /// autosave); `None` disables persistence (the test ROM).
     pub fn start_local(
         &mut self,
         rom: Vec<u8>,
@@ -300,40 +311,50 @@ impl Runtime {
             rtc,
             link,
         })?;
-        self.save_file = save_file;
+        self.save_target = save_file.map(|file| SaveTarget {
+            game: rom_crc32,
+            file,
+        });
         self.last_persisted_save = None;
         self.last_autosave_ms = performance_now();
         self.adopt_session(Session::Local(session));
         Ok(())
     }
 
-    /// The saves/ file SRAM last persisted into, taken once. Outlives
-    /// the session so the UI can see it after close.
-    pub fn take_persisted_save(&mut self) -> Option<String> {
+    /// Where SRAM last persisted, taken once. Outlives the session so
+    /// the UI can see it after close.
+    pub fn take_persisted_save(&mut self) -> Option<SaveTarget> {
         self.last_persisted_save.take()
     }
 
-    /// Persist SRAM into the chosen saves/ file (fire-and-forget; OPFS
-    /// writes are async and small). No-op when unchanged since the last
-    /// write.
+    /// Persist SRAM into the chosen file in the game's save directory
+    /// (fire-and-forget; OPFS writes are async and small). No-op when
+    /// unchanged since the last write.
     fn persist_sram(&mut self, bytes: Option<Vec<u8>>) {
-        let (Some(bytes), Some(name), Some(storage)) = (bytes, &self.save_file, &self.storage)
+        let (Some(bytes), Some(target), Some(storage)) = (bytes, &self.save_target, &self.storage)
         else {
             return;
         };
-        self.last_persisted_save = Some(name.clone());
+        self.last_persisted_save = Some(target.clone());
         let crc = crc32fast::hash(&bytes);
         if self.saved_crc == Some(crc) {
             return;
         }
         self.saved_crc = Some(crc);
-        let name = name.clone();
+        let target = target.clone();
         let storage = storage.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            if let Err(e) = crate::storage::write(storage.saves(), &name, &bytes).await {
-                log::error!("couldn't write back {name}: {e}");
+            let dir = match storage.save_dir(target.game).await {
+                Ok(dir) => dir,
+                Err(e) => {
+                    log::error!("couldn't open {:08x}'s save directory: {e}", target.game);
+                    return;
+                }
+            };
+            if let Err(e) = crate::storage::write(&dir, &target.file, &bytes).await {
+                log::error!("couldn't write back {}: {e}", target.file);
             } else {
-                log::info!("saved {name} ({} bytes)", bytes.len());
+                log::info!("saved {} ({} bytes)", target.file, bytes.len());
             }
         });
     }
@@ -501,7 +522,7 @@ impl Runtime {
         // Write the cart's SRAM back before the machine goes away.
         let sram = self.export_sram();
         self.persist_sram(sram);
-        self.save_file = None;
+        self.save_target = None;
         self.saved_crc = None;
         self.audio_binding = None;
         *MENU_OPEN.write() = false;
@@ -698,7 +719,7 @@ impl Runtime {
         // (a tab kill then loses at most this window). Netplay never
         // autosaves mid-session — the frontier's SRAM is speculative
         // under rollback; it persists at end/unplug instead.
-        if self.save_file.is_some()
+        if self.save_target.is_some()
             && self.session.as_ref().map(|s| s.kind()) == Some(SessionKind::Local)
             && now_ms - self.last_autosave_ms > 60_000.0
         {

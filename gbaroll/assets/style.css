@@ -651,6 +651,16 @@ main.settings-main .card:last-child {
     padding-right: 10px;
 }
 
+/* The default-save star: hollow like its ghost siblings until this
+   save is the game's default, then filled in the warn gold. */
+.default-btn.is-default {
+    color: var(--warn);
+}
+
+.default-btn.is-default .icon {
+    fill: currentColor;
+}
+
 /* One line, constant row height — the two panes must mirror each
    other. The name ellipsizes; the meta keeps its natural width at the
    right edge (and hides on small screens, see below). */
