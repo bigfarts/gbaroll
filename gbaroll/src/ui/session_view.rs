@@ -182,7 +182,7 @@ pub fn SessionMenuCard() -> Element {
     };
 
     rsx! {
-        div { class: "tele-card menu-card",
+        div { class: "tele-card",
             div { class: "tele-head",
                 div {
                     h3 { "{title}" }
@@ -209,11 +209,6 @@ pub fn SessionMenuCard() -> Element {
                 }
             }
             div { class: "menu-actions",
-                button {
-                    class: "btn primary",
-                    onclick: move |_| *MENU_OPEN.write() = false,
-                    "Back to game"
-                }
                 // The console's reset button — solo only: one side
                 // rebooting isn't an input a netplay link could replay.
                 if !is_netplay {
