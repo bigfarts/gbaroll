@@ -17,10 +17,8 @@ use crate::session::{SessionEnd, SessionKind};
 pub fn SessionView() -> Element {
     let Ctx {
         runtime,
-        mut config,
+        config,
         library,
-        mut library_rev,
-        mut selected_save,
         ..
     } = use_ctx();
 
@@ -42,35 +40,12 @@ pub fn SessionView() -> Element {
     {
         let runtime = runtime.clone();
         use_drop(move || {
-            let mut rt = runtime.borrow_mut();
-            rt.detach_canvas();
-            if let Some(target) = rt.take_persisted_save() {
-                // A "(fresh save)" session that persisted SRAM created
-                // a real save file — move the picker onto it so the
-                // next Play continues it instead of booting fresh
-                // again.
-                if selected_save.peek().is_none() {
-                    selected_save.set(Some(target.file.clone()));
-                }
-                // A game's first-ever save becomes its default (the
-                // index still predates this session's write-back).
-                let had_saves = library
-                    .peek()
-                    .as_ref()
-                    .and_then(|v| v.as_ref())
-                    .and_then(|(_, saves)| saves.get(&target.game))
-                    .is_some_and(|list| !list.is_empty());
-                if !had_saves {
-                    config.with_mut(|c| {
-                        c.default_saves.insert(target.game, target.file);
-                    });
-                }
-            }
-            drop(rt);
-            // Leaving the session lands back on the pickers, and the
-            // session's SRAM write-back probably created (or updated)
-            // a save — rescan so it shows immediately.
-            *library_rev.write() += 1;
+            runtime.borrow_mut().detach_canvas();
+            // No rescan on the way out: an SRAM write-back may still
+            // be in flight, and its completion bumps SAVES_REV
+            // itself. (The created save's adoption as the game's pick
+            // lives in the app root — signal writes from a dropping
+            // scope are unreliable.)
         });
     }
 
@@ -89,7 +64,7 @@ pub fn SessionView() -> Element {
             .and_then(|crc| {
                 lib.as_ref()
                     .and_then(|v| v.as_ref())
-                    .and_then(|(lib, _)| lib.by_crc32(crc))
+                    .and_then(|lib| lib.by_crc32(crc))
             })
             .map(|rom| rom.display_name().to_string())
             .unwrap_or_else(|| "Session".to_string());
@@ -175,7 +150,7 @@ pub fn SessionMenuCard() -> Element {
             .and_then(|crc| {
                 lib.as_ref()
                     .and_then(|v| v.as_ref())
-                    .and_then(|(lib, _)| lib.by_crc32(crc))
+                    .and_then(|lib| lib.by_crc32(crc))
             })
             .map(|rom| rom.display_name().to_string())
             .unwrap_or_else(|| "Session".to_string());

@@ -7,7 +7,7 @@ use dioxus::prelude::*;
 
 use super::{icons, play, session_view, settings, use_ctx, Ctx, Tab};
 use crate::config::Config;
-use crate::library::{self, Library};
+use crate::library::Library;
 use crate::nointro::DatIndex;
 use crate::runtime::{Runtime, SESSION_EPOCH};
 use crate::storage::Storage;
@@ -50,13 +50,18 @@ static FONT_MONO_BOLD: Asset = asset!(
 
 #[component]
 pub fn App() -> Element {
-    let mut config = use_hook(|| Signal::new(Config::load()));
+    let config = use_hook(|| Signal::new(Config::load()));
     let runtime = use_hook(Runtime::install);
     // Bumped to rescan the library after imports/deletes.
     let library_rev = use_signal(|| 0u64);
-    // The last pick is remembered across loads.
+    // The last picks are remembered across loads: the game, and its
+    // last-picked save (pruned later if the file is gone — the
+    // save-pane listing is the judge).
     let selected_game = use_signal(|| config.peek().last_game);
-    let selected_save = use_signal(|| Option::<String>::None);
+    let selected_save = use_signal(|| {
+        let c = config.peek();
+        c.last_game.and_then(|crc32| c.last_saves.get(&crc32).cloned())
+    });
 
     let storage = use_resource(|| async {
         match Storage::open().await {
@@ -84,20 +89,7 @@ pub fn App() -> Element {
         let dat = dat.read().clone();
         async move {
             match (storage.flatten(), dat) {
-                (Some(s), Some(d)) => {
-                    let lib = Library::scan(&s, &d).await;
-                    let (saves, adopted) = library::scan_saves(&s, &lib).await;
-                    // A migrated legacy save was the old auto-pick for
-                    // its game, so it becomes the game's default.
-                    if !adopted.is_empty() {
-                        config.with_mut(|c| {
-                            for (crc32, name) in adopted {
-                                c.default_saves.entry(crc32).or_insert(name);
-                            }
-                        });
-                    }
-                    Some((lib, saves))
-                }
+                (Some(s), Some(d)) => Some(Library::scan(&s, &d).await),
                 _ => None,
             }
         }
@@ -120,6 +112,29 @@ pub fn App() -> Element {
         use_effect(move || {
             if let Some(Some(storage)) = storage.read().clone() {
                 runtime.borrow_mut().set_storage(storage);
+            }
+        });
+    }
+
+    // A "(fresh save)" session that persisted SRAM created a real
+    // save file — move the picker onto it, and remember it as the
+    // game's pick, so the next Play continues it instead of booting
+    // fresh again. Watched from the always-mounted root on session
+    // epochs (close, swap): the session view's own teardown proved
+    // an unreliable place to write signals from.
+    {
+        let runtime = runtime.clone();
+        let mut selected_save = selected_save;
+        let mut config = config;
+        use_effect(move || {
+            let _ = SESSION_EPOCH.read();
+            if let Some(target) = runtime.borrow_mut().take_persisted_save() {
+                if selected_save.peek().is_none() {
+                    selected_save.set(Some(target.file.clone()));
+                    config.with_mut(|c| {
+                        c.last_saves.insert(target.game, target.file);
+                    });
+                }
             }
         });
     }
@@ -260,7 +275,7 @@ fn Shell() -> Element {
                             .read()
                             .as_ref()
                             .and_then(|v| v.as_ref())
-                            .is_some_and(|(lib, _)| lib.by_crc32(*crc32).is_some())
+                            .is_some_and(|lib| lib.by_crc32(*crc32).is_some())
                     });
                     let files = evt.files();
                     async move {
@@ -268,6 +283,7 @@ fn Shell() -> Element {
                         let counts = crate::web::import_files(&storage, files, dest).await;
                         play::import_flashes(counts, play::ROM_IMPORT_FLASH.signal());
                         *library_rev.write() += 1;
+                        *crate::runtime::SAVES_REV.write() += 1;
                     }
                 },
                 if current == Tab::Play {

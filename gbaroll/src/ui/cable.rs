@@ -98,7 +98,7 @@ fn start_lobby(ctx: &Ctx, mode: LobbyMode) {
         let Some(info) = lib
             .as_ref()
             .and_then(|v| v.as_ref())
-            .and_then(|(lib, _)| lib.by_crc32(crc))
+            .and_then(|lib| lib.by_crc32(crc))
         else {
             *LINK_NOTICE.write() =
                 Some("this game's ROM is missing from the library".to_string());
@@ -172,7 +172,7 @@ fn drain(ctx: Ctx, handle: lobby::LobbyHandle) {
                     // mismatch keeps the echo from looping.
                     let have_all = {
                         let lib = ctx.library.read();
-                        let lib = lib.as_ref().and_then(|v| v.as_ref()).map(|(l, _)| l);
+                        let lib = lib.as_ref().and_then(|v| v.as_ref());
                         players
                             .iter()
                             .all(|p| lib.is_some_and(|l| l.by_crc32(p.rom_crc32).is_some()))
@@ -286,7 +286,6 @@ fn drain(ctx: Ctx, handle: lobby::LobbyHandle) {
                             .read()
                             .clone()
                             .flatten()
-                            .map(|(lib, _)| lib)
                             .unwrap_or_default();
                         (storage, lib)
                     };
@@ -413,7 +412,7 @@ pub fn RoomSection() -> Element {
     // missing ROM reads by its proper name.
     let (have_crc, roster_names) = {
         let lib = ctx.library.read();
-        let lib = lib.as_ref().and_then(|v| v.as_ref()).map(|(lib, _)| lib);
+        let lib = lib.as_ref().and_then(|v| v.as_ref());
         let dat = ctx.dat.read();
         let crcs: std::collections::HashSet<u32> = lib
             .map(|lib| lib.roms.iter().map(|r| r.crc32).collect())
@@ -543,7 +542,7 @@ pub fn LinkUpButton() -> Element {
         let lib = ctx.library.read();
         lib.as_ref()
             .and_then(|v| v.as_ref())
-            .map(|(lib, _)| lib.roms.iter().map(|r| r.crc32).collect())
+            .map(|lib| lib.roms.iter().map(|r| r.crc32).collect())
             .unwrap_or_default()
     };
     // Linkable once anyone else is in and every seat holds every ROM.
@@ -595,7 +594,7 @@ pub fn CableBody() -> Element {
         let lib = ctx.library.read();
         lib.as_ref()
             .and_then(|v| v.as_ref())
-            .map(|(lib, _)| lib.roms.iter().map(|r| r.crc32).collect())
+            .map(|lib| lib.roms.iter().map(|r| r.crc32).collect())
             .unwrap_or_default()
     };
 

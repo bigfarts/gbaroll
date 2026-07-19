@@ -2,7 +2,7 @@
 //! library and the saves are twin OPFS-backed pick-lists with import,
 //! search, rename (saves), and delete; saves are namespaced per game
 //! (`saves/<crc32>/`), the save pane only ever shows the selected
-//! game's, and a starred save is the game's default pick. Action
+//! game's, and each game remembers its last-picked save. Action
 //! feedback flashes inline next to whatever triggered it.
 
 use dioxus::prelude::*;
@@ -141,27 +141,51 @@ pub fn PlayScreen() -> Element {
     let save_flash = use_signal(|| Option::<Flash>::None);
     let launch_flash = use_signal(|| Option::<Flash>::None);
 
-    // The remembered pick restores its default save once the library
-    // arrives (only if nothing else was chosen yet).
-    let mut restored = use_signal(|| false);
-    use_effect(move || {
-        if *restored.peek() {
-            return;
+    // The selected game's saves, listed straight from its directory
+    // on every pick and every SAVES_REV bump — there is no cached
+    // index. The listed game rides along so a stale listing can't
+    // speak for a new pick, and `authoritative` marks a listing taken
+    // with no SRAM write-back in flight — one taken mid-write may
+    // predate the file the write is creating.
+    let game_saves_res = use_resource(move || {
+        let _ = crate::runtime::SAVES_REV.read();
+        let authoritative = *crate::runtime::SAVES_IN_FLIGHT.read() == 0;
+        let crc32 = *selected_game.read();
+        let storage = storage_res.read().clone();
+        async move {
+            match (storage.flatten(), crc32) {
+                (Some(storage), Some(crc32)) => (
+                    Some(crc32),
+                    authoritative,
+                    library::list_game_saves(&storage, crc32).await,
+                ),
+                // No storage yet: an empty answer that must not speak
+                // for the game (the pruning below would trust it).
+                _ => (None, false, Vec::new()),
+            }
         }
-        let guard = library.read();
-        let Some(Some((_, saves))) = guard.as_ref() else {
+    });
+    // A picked save the directory doesn't actually hold (a stale
+    // remembered pick, a file deleted elsewhere) falls back to fresh
+    // once an authoritative listing lands, and the memory of it goes
+    // too.
+    use_effect(move || {
+        let guard = game_saves_res.read();
+        let Some((for_game, authoritative, saves)) = guard.as_ref() else {
             return;
         };
-        restored.set(true);
-        if selected_save.peek().is_none() {
-            if let Some(crc32) = *selected_game.peek() {
-                let default = config
-                    .peek()
-                    .default_saves
-                    .get(&crc32)
-                    .filter(|name| saves.get(&crc32).is_some_and(|list| list.contains(name)))
-                    .cloned();
-                selected_save.set(default);
+        if !authoritative || *for_game != *selected_game.peek() {
+            return;
+        }
+        let sel = selected_save.peek().clone();
+        if let Some(sel) = sel {
+            if !saves.contains(&sel) {
+                selected_save.set(None);
+                if let Some(crc32) = *for_game {
+                    config.with_mut(|c| {
+                        c.last_saves.remove(&crc32);
+                    });
+                }
             }
         }
     });
@@ -193,15 +217,15 @@ pub fn PlayScreen() -> Element {
             };
             match renamed {
                 Ok(()) => {
-                    // The picker and the default marker follow.
+                    // The picker and the remembered pick follow.
                     if selected_save.read().as_deref() == Some(save.as_str()) {
                         selected_save.set(Some(to.clone()));
                     }
-                    if config.peek().default_saves.get(&crc32).map(String::as_str)
+                    if config.peek().last_saves.get(&crc32).map(String::as_str)
                         == Some(save.as_str())
                     {
                         config.with_mut(|c| {
-                            c.default_saves.insert(crc32, to.clone());
+                            c.last_saves.insert(crc32, to.clone());
                         });
                     }
                 }
@@ -213,13 +237,13 @@ pub fn PlayScreen() -> Element {
                 ),
             }
             rename_target.set(None);
-            *library_rev.write() += 1;
+            *crate::runtime::SAVES_REV.write() += 1;
         });
     };
 
-    let (scanned, roms, save_index) = match library.read().as_ref() {
-        Some(Some((lib, saves))) => (true, lib.roms.clone(), saves.clone()),
-        _ => (false, Vec::new(), library::SaveIndex::default()),
+    let (scanned, roms) = match library.read().as_ref() {
+        Some(Some(lib)) => (true, lib.roms.clone()),
+        _ => (false, Vec::new()),
     };
     let opfs_down = matches!(storage_res.read().as_ref(), Some(None));
 
@@ -239,13 +263,15 @@ pub fn PlayScreen() -> Element {
         .read()
         .and_then(|crc| roms.iter().find(|r| r.crc32 == crc).cloned());
 
-    // The save pane shows only the selected game's saves.
+    // The save pane shows only the selected game's saves (empty while
+    // a fresh pick's directory is still listing).
     let game_crc32 = selected_info.as_ref().map(|r| r.crc32);
-    let game_saves: Vec<String> = game_crc32
-        .and_then(|crc| save_index.get(&crc).cloned())
+    let game_saves: Vec<String> = game_saves_res
+        .read()
+        .as_ref()
+        .filter(|(for_game, _, _)| *for_game == game_crc32)
+        .map(|(_, _, saves)| saves.clone())
         .unwrap_or_default();
-    let default_name: Option<String> =
-        game_crc32.and_then(|crc| config.read().default_saves.get(&crc).cloned());
     let save_needle = save_search.read().to_ascii_lowercase();
     let filtered_saves: Vec<String> = game_saves
         .iter()
@@ -312,6 +338,7 @@ pub fn PlayScreen() -> Element {
                                         crate::web::import_files(&storage, files, dest).await;
                                     import_flashes(counts, rom_import_flash);
                                     *library_rev.write() += 1;
+                                    *crate::runtime::SAVES_REV.write() += 1;
                                 }
                             },
                         }
@@ -339,21 +366,16 @@ pub fn PlayScreen() -> Element {
                                     name: "game-pick",
                                     class: "pick-radio",
                                     checked: *selected_game.read() == Some(rom.crc32),
-                                    // Picking the game brings its default
-                                    // save along; no default = fresh save.
+                                    // Picking the game restores its last-
+                                    // picked save (pruned if the file turns
+                                    // out gone); none remembered = fresh.
                                     onchange: {
                                         let crc32 = rom.crc32;
-                                        let game_saves =
-                                            save_index.get(&crc32).cloned().unwrap_or_default();
                                         move |_| {
                                             selected_game.set(Some(crc32));
-                                            let default = config
-                                                .peek()
-                                                .default_saves
-                                                .get(&crc32)
-                                                .filter(|name| game_saves.contains(name))
-                                                .cloned();
-                                            selected_save.set(default);
+                                            selected_save.set(
+                                                config.peek().last_saves.get(&crc32).cloned(),
+                                            );
                                             // Remembered for the next load.
                                             config.with_mut(|c| c.last_game = Some(crc32));
                                         }
@@ -495,6 +517,7 @@ pub fn PlayScreen() -> Element {
                                         crate::web::import_files(&storage, files, dest).await;
                                     import_flashes(counts, save_import_flash);
                                     *library_rev.write() += 1;
+                                    *crate::runtime::SAVES_REV.write() += 1;
                                 }
                             },
                         }
@@ -510,7 +533,16 @@ pub fn PlayScreen() -> Element {
                                 name: "save-pick",
                                 class: "pick-radio",
                                 checked: selected_save.read().is_none(),
-                                onchange: move |_| selected_save.set(None),
+                                onchange: move |_| {
+                                    selected_save.set(None);
+                                    // Choosing fresh forgets the game's
+                                    // remembered pick.
+                                    if let Some(crc32) = *selected_game.peek() {
+                                        config.with_mut(|c| {
+                                            c.last_saves.remove(&crc32);
+                                        });
+                                    }
+                                },
                             }
                             span { class: "sub", "(fresh save)" }
                         }
@@ -601,22 +633,22 @@ pub fn PlayScreen() -> Element {
                                                     {
                                                         selected_save.set(None);
                                                     }
-                                                    // A deleted default is no
-                                                    // default at all.
+                                                    // No remembering deleted
+                                                    // saves.
                                                     if config
                                                         .peek()
-                                                        .default_saves
+                                                        .last_saves
                                                         .get(&crc32)
                                                         .map(String::as_str)
                                                         == Some(save.as_str())
                                                     {
                                                         config.with_mut(|c| {
-                                                            c.default_saves.remove(&crc32);
+                                                            c.last_saves.remove(&crc32);
                                                         });
                                                     }
                                                 }
                                                 pending_save_delete.set(None);
-                                                *library_rev.write() += 1;
+                                                *crate::runtime::SAVES_REV.write() += 1;
                                             }
                                         }
                                     },
@@ -640,47 +672,21 @@ pub fn PlayScreen() -> Element {
                                     checked: selected_save.read().as_deref() == Some(save.as_str()),
                                     onchange: {
                                         let save = save.clone();
-                                        move |_| selected_save.set(Some(save.clone()))
+                                        move |_| {
+                                            selected_save.set(Some(save.clone()));
+                                            // Remembered per game, restored
+                                            // when the game is picked again.
+                                            if let Some(crc32) = *selected_game.peek() {
+                                                config.with_mut(|c| {
+                                                    c.last_saves.insert(crc32, save.clone());
+                                                });
+                                            }
+                                        }
                                     },
                                 }
                                 code { "{save}" }
                             }
                             div { class: "row-actions",
-                                // The star: this save is the game's
-                                // default — the pick that comes along
-                                // when the game is selected. Click
-                                // again to clear (back to fresh).
-                                button {
-                                    class: if default_name.as_deref() == Some(save.as_str()) {
-                                        "btn ghost icon-btn default-btn is-default"
-                                    } else {
-                                        "btn ghost icon-btn default-btn"
-                                    },
-                                    title: if default_name.as_deref() == Some(save.as_str()) {
-                                        "Default save — click to clear"
-                                    } else {
-                                        "Make default"
-                                    },
-                                    onclick: {
-                                        let save = save.clone();
-                                        move |evt: MouseEvent| {
-                                            evt.stop_propagation();
-                                            let Some(crc32) = *selected_game.peek() else {
-                                                return;
-                                            };
-                                            config.with_mut(|c| {
-                                                if c.default_saves.get(&crc32).map(String::as_str)
-                                                    == Some(save.as_str())
-                                                {
-                                                    c.default_saves.remove(&crc32);
-                                                } else {
-                                                    c.default_saves.insert(crc32, save.clone());
-                                                }
-                                            });
-                                        }
-                                    },
-                                    icons::Star {}
-                                }
                                 button {
                                     class: "btn ghost icon-btn",
                                     title: "Rename",

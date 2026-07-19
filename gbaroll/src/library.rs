@@ -3,12 +3,8 @@
 //! (see [`crate::nointro`]) supply the display names, matched by CRC32;
 //! ROMs missing from every DAT fall back to their header title.
 
-use std::collections::HashMap;
-
-use web_sys::FileSystemFileHandle;
-
 use crate::nointro::DatIndex;
-use crate::storage::{self, Storage, StorageError};
+use crate::storage::{self, Storage};
 
 pub const ROM_EXTENSIONS: &[&str] = &["gba", "srl", "agb"];
 pub const SAVE_EXTENSIONS: &[&str] = &["sav", "sa1", "srm"];
@@ -155,11 +151,6 @@ pub async fn read_rom(storage: &Storage, info: &RomInfo) -> anyhow::Result<Vec<u
     Ok(bytes)
 }
 
-/// Per-game save listings: the files inside each `saves/<crc32>/`
-/// directory, keyed by the game's CRC32. Saves only ever show under
-/// their own game, so names are free to repeat across games.
-pub type SaveIndex = HashMap<u32, Vec<String>>;
-
 /// Split a save's file name around its final dot: the stem.
 pub fn stem_of(name: &str) -> &str {
     name.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(name)
@@ -170,87 +161,22 @@ pub fn ext_of(name: &str) -> &str {
     name.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("sav")
 }
 
-/// A `saves/` subdirectory name is its game's CRC32 in `%08x`.
-fn parse_save_dir(name: &str) -> Option<u32> {
-    (name.len() == 8 && name.bytes().all(|b| b.is_ascii_hexdigit()))
-        .then(|| u32::from_str_radix(name, 16).ok())
-        .flatten()
-}
-
-/// Scan the per-game save directories into a [`SaveIndex`].
-///
-/// Also migrates the retired flat layout: a file directly in `saves/`
-/// whose stem matches a game's display name (the old write-back
-/// naming, which the retired auto-pick keyed on) moves into that
-/// game's directory, and the second return lists the moves so the
-/// caller can make each one its game's default. A root file matching
-/// no game stays put — and invisible — rather than being guessed into
-/// some game's namespace.
-pub async fn scan_saves(storage: &Storage, lib: &Library) -> (SaveIndex, Vec<(u32, String)>) {
-    let mut adopted = Vec::new();
-    match storage::list_files(storage.saves()).await {
-        Ok(files) => {
-            for (name, handle) in files {
-                if !has_extension(&name, SAVE_EXTENSIONS) {
-                    continue;
-                }
-                let matched = lib
-                    .roms
-                    .iter()
-                    .find(|r| stem_of(&name).eq_ignore_ascii_case(r.display_name()));
-                let Some(rom) = matched else {
-                    log::warn!("legacy save {name} matches no game; leaving it at saves/");
-                    continue;
-                };
-                match migrate_save(storage, &name, &handle, rom.crc32).await {
-                    Ok(true) => adopted.push((rom.crc32, name)),
-                    Ok(false) => {}
-                    Err(e) => log::warn!("couldn't migrate legacy save {name}: {e}"),
-                }
-            }
+/// One game's save files, listed straight from its `saves/<crc32>/`
+/// directory — no cached index; callers re-list whenever they need
+/// the current picture. A game with no directory has no saves.
+pub async fn list_game_saves(storage: &Storage, crc32: u32) -> Vec<String> {
+    let Some(dir) = storage.existing_save_dir(crc32).await else {
+        return Vec::new();
+    };
+    match storage::list_files(&dir).await {
+        Ok(files) => files
+            .into_iter()
+            .map(|(name, _)| name)
+            .filter(|n| has_extension(n, SAVE_EXTENSIONS))
+            .collect(),
+        Err(e) => {
+            log::error!("couldn't list {crc32:08x}'s saves: {e}");
+            Vec::new()
         }
-        Err(e) => log::error!("couldn't list legacy saves: {e}"),
     }
-    let mut index = SaveIndex::new();
-    match storage::list_dirs(storage.saves()).await {
-        Ok(dirs) => {
-            for (dir_name, dir) in dirs {
-                let Some(crc32) = parse_save_dir(&dir_name) else { continue };
-                match storage::list_files(&dir).await {
-                    Ok(files) => {
-                        let names = files
-                            .into_iter()
-                            .map(|(name, _)| name)
-                            .filter(|n| has_extension(n, SAVE_EXTENSIONS))
-                            .collect();
-                        index.insert(crc32, names);
-                    }
-                    Err(e) => log::warn!("couldn't list saves/{dir_name}: {e}"),
-                }
-            }
-        }
-        Err(e) => log::error!("couldn't list the save directories: {e}"),
-    }
-    (index, adopted)
-}
-
-/// Move one legacy root save into its game's directory; `Ok(false)`
-/// when that name is already taken there (the newer per-game file
-/// wins; the legacy copy stays where it was).
-async fn migrate_save(
-    storage: &Storage,
-    name: &str,
-    handle: &FileSystemFileHandle,
-    crc32: u32,
-) -> Result<bool, StorageError> {
-    let dir = storage.save_dir(crc32).await?;
-    if storage::read(&dir, name).await?.is_some() {
-        log::warn!("legacy save {name} already exists under {crc32:08x}/; leaving it at saves/");
-        return Ok(false);
-    }
-    let bytes = storage::read_handle(handle).await?;
-    storage::write(&dir, name, &bytes).await?;
-    storage::delete(storage.saves(), name).await?;
-    log::info!("migrated legacy save {name} into {crc32:08x}/");
-    Ok(true)
 }

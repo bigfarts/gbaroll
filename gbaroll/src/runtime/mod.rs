@@ -44,6 +44,20 @@ pub static FRAME_REV: GlobalSignal<u64> = Signal::global(|| 0);
 /// Bumped on session start/swap/close — drives structural UI changes.
 pub static SESSION_EPOCH: GlobalSignal<u64> = Signal::global(|| 0);
 
+/// Bumped whenever save data changes on disk — every SRAM write-back
+/// here, and the UI's own save imports/renames/deletes. The save
+/// picker re-lists the selected game's directory on each bump, so it
+/// only refreshes once a write has actually landed (relisting at
+/// session close raced the async write-back and missed the file).
+pub static SAVES_REV: GlobalSignal<u64> = Signal::global(|| 0);
+
+/// SRAM write-backs still in flight. A directory listing taken while
+/// this is nonzero may predate the write, so it must not be treated
+/// as the truth about which saves exist (the picker's stale-pick
+/// pruning once ate a freshly created save this way); the drop back
+/// to zero re-lists.
+pub static SAVES_IN_FLIGHT: GlobalSignal<u32> = Signal::global(|| 0);
+
 /// The session menu overlay. It lives here rather than in the UI
 /// because the document keyboard listener owns the Escape toggle.
 pub static MENU_OPEN: GlobalSignal<bool> = Signal::global(|| false);
@@ -343,6 +357,7 @@ impl Runtime {
         self.saved_crc = Some(crc);
         let target = target.clone();
         let storage = storage.clone();
+        *SAVES_IN_FLIGHT.write() += 1;
         wasm_bindgen_futures::spawn_local(async move {
             let dir = match storage.save_dir(target.game).await {
                 Ok(dir) => dir,
@@ -356,6 +371,10 @@ impl Runtime {
             } else {
                 log::info!("saved {} ({} bytes)", target.file, bytes.len());
             }
+            // Either way the folder's truth may have moved — let the
+            // picker re-list it (a failed write prunes the phantom).
+            *SAVES_IN_FLIGHT.write() -= 1;
+            *SAVES_REV.write() += 1;
         });
     }
 

@@ -67,10 +67,6 @@ impl Storage {
         &self.roms
     }
 
-    pub fn saves(&self) -> &FileSystemDirectoryHandle {
-        &self.saves
-    }
-
     /// The per-game save directory `saves/<crc32 hex>/`, created on
     /// demand. Saves are namespaced by the game they belong to, so the
     /// same file name can exist under different games.
@@ -79,6 +75,16 @@ impl Storage {
         crc32: u32,
     ) -> Result<FileSystemDirectoryHandle, StorageError> {
         subdir(&self.saves, &format!("{crc32:08x}")).await
+    }
+
+    /// The per-game save directory if the game already has one;
+    /// unlike [`Self::save_dir`], never creates it.
+    pub async fn existing_save_dir(&self, crc32: u32) -> Option<FileSystemDirectoryHandle> {
+        JsFuture::from(self.saves.get_directory_handle(&format!("{crc32:08x}")))
+            .await
+            .ok()?
+            .dyn_into()
+            .ok()
     }
 
     pub fn root(&self) -> &FileSystemDirectoryHandle {
@@ -115,29 +121,6 @@ pub async fn list_files(
         let value = js_sys::Reflect::get(&next, &"value".into())?;
         if let Ok(file) = value.dyn_into::<FileSystemFileHandle>() {
             out.push((file.name(), file));
-        }
-    }
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(out)
-}
-
-/// List a directory's subdirectories (name, handle), sorted by name.
-pub async fn list_dirs(
-    dir: &FileSystemDirectoryHandle,
-) -> Result<Vec<(String, FileSystemDirectoryHandle)>, StorageError> {
-    let iter = dir.unchecked_ref::<DirectoryHandleExt>().values();
-    let mut out = Vec::new();
-    loop {
-        let next = JsFuture::from(iter.next().map_err(StorageError::from)?).await?;
-        let done = js_sys::Reflect::get(&next, &"done".into())?
-            .as_bool()
-            .unwrap_or(true);
-        if done {
-            break;
-        }
-        let value = js_sys::Reflect::get(&next, &"value".into())?;
-        if let Ok(sub) = value.dyn_into::<FileSystemDirectoryHandle>() {
-            out.push((sub.name(), sub));
         }
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));

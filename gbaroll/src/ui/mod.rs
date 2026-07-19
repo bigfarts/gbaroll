@@ -47,9 +47,10 @@ struct Ctx {
     /// `Some(None)` when the browser has no OPFS.
     storage: Resource<Option<Storage>>,
     dat: Resource<DatIndex>,
-    /// Library scan + per-game save index; `None` until OPFS and the
-    /// DAT are up.
-    library: Resource<Option<(Library, crate::library::SaveIndex)>>,
+    /// The ROM library scan; `None` until OPFS and the DAT are up.
+    /// (Saves have no index — the pane lists the selected game's
+    /// directory each time.)
+    library: Resource<Option<Library>>,
     /// The library's picked game (CRC32) — whose saves the save pane
     /// shows, and where dropped save files import to.
     selected_game: Signal<Option<u32>>,
