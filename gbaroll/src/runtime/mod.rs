@@ -691,6 +691,9 @@ impl Runtime {
                         if let Some(handoff) = &handoff {
                             self.persist_sram(handoff.save.clone());
                         }
+                        let wireless = handoff
+                            .as_ref()
+                            .is_some_and(|h| h.link == crate::session::LinkKind::Wireless);
                         let continued = match (was_netplay && end.unplugs(), handoff) {
                             (true, Some(handoff)) => {
                                 self.unplug_continue(handoff, rom_crc32, unplug_reason(&end))
@@ -713,7 +716,27 @@ impl Runtime {
                             // walking the link out — the re-merge is
                             // already in flight — or the player
                             // leaving the room.)
-                            crate::ui::notify_session_dropped();
+                            //
+                            // A wireless continuation that PLAYS through
+                            // that wait severs the survivors' live
+                            // connections on its first RF tick — the
+                            // adapter treats the silent peers as walked
+                            // out of range, and the games see a phantom
+                            // disconnect the re-merge was about to make
+                            // unnecessary. Hold the machine frozen on
+                            // the handoff state instead; the lobby
+                            // resumes it when the wait resolves any
+                            // other way (merge failure, the roster
+                            // shrinking to just us, leaving the room).
+                            let hold = wireless && crate::ui::room_has_company();
+                            if hold {
+                                if let Some(shared) = self.shared() {
+                                    shared
+                                        .paused
+                                        .store(true, std::sync::atomic::Ordering::Release);
+                                }
+                            }
+                            crate::ui::notify_session_dropped(hold);
                         }
                         if !continued {
                             self.last_end = Some(end);

@@ -55,12 +55,30 @@ pub fn leave() {
     *LOBBY_UI.write() = None;
 }
 
+/// Whether this machine holds a room with anyone else still in it —
+/// i.e. a re-merge is worth waiting for.
+pub fn room_has_company() -> bool {
+    LOBBY_UI
+        .peek()
+        .as_ref()
+        .is_some_and(|ui| ui.players.len() >= 2)
+}
+
 /// The merged session died without our say-so (a peer walked out of
 /// range). If this machine still holds the room, the lobby dances the
 /// ready bit so the server voids the dead merge and re-merges the room
 /// once it converges. Called by the runtime's unplug-continue path.
-pub fn notify_session_dropped() {
+/// `held` reports that the runtime froze the continuation for the
+/// re-merge (wireless: running it would sever the survivors' live
+/// connections on the first RF tick) — surface why the game is
+/// standing still.
+pub fn notify_session_dropped(held: bool) {
     send_cmd(LobbyCommand::Dropped);
+    if held {
+        if let Some(ui) = LOBBY_UI.write().as_mut() {
+            ui.status = Some("Player left — waiting to relink…".to_string());
+        }
+    }
 }
 
 /// A room or merge failure that ends our membership: let the (possibly
@@ -180,10 +198,28 @@ fn drain(ctx: Ctx, handle: lobby::LobbyHandle) {
                     if players.get(your_idx).map(|p| p.ready) != Some(have_all) {
                         handle.send(LobbyCommand::SetReady { ready: have_all });
                     }
+                    // A wireless continuation may be frozen against the
+                    // re-merge (see `notify_session_dropped`): a merge
+                    // isn't in flight, yet the machine is paused. A
+                    // roster with company keeps that hold — and its
+                    // status line — while the room converges; one
+                    // shrunk to just us means nobody is coming, so the
+                    // machine plays on solo and its departed peers
+                    // fall out of range for real.
+                    let held = !LOBBY_UI.peek().as_ref().is_some_and(|ui| ui.starting)
+                        && ctx.runtime.borrow().shared().is_some_and(|s| {
+                            s.paused.load(std::sync::atomic::Ordering::Acquire)
+                        });
+                    if held && players.len() < 2 {
+                        if let Some(shared) = ctx.runtime.borrow().shared() {
+                            shared.resume();
+                        }
+                    }
+                    let keep_status = held && players.len() >= 2;
                     if let Some(ui) = LOBBY_UI.write().as_mut() {
                         ui.players = players;
                         ui.my_idx = your_idx;
-                        if !ui.starting {
+                        if !ui.starting && !keep_status {
                             ui.status = None;
                         }
                     }
@@ -337,7 +373,13 @@ fn drain(ctx: Ctx, handle: lobby::LobbyHandle) {
                 }
             }
         }
-        // The room task ended without a session (server closed, etc.).
+        // The room task ended without a session (left, server closed,
+        // etc.). However it went, never leave the machine frozen: a
+        // wireless continuation held for a re-merge that can no longer
+        // come must play on solo.
+        if let Some(shared) = ctx.runtime.borrow().shared() {
+            shared.resume();
+        }
         LOBBY_CMDS.with(|c| *c.borrow_mut() = None);
         if LOBBY_UI.peek().is_some() {
             *LOBBY_UI.write() = None;
