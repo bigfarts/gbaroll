@@ -429,21 +429,49 @@ pub fn PlayScreen() -> Element {
                                         class: "btn danger",
                                         onclick: {
                                             let file_name = rom.file_name.clone();
+                                            let crc32 = rom.crc32;
                                             move |evt: MouseEvent| {
                                                 evt.stop_propagation();
                                                 let storage = storage_res.read().clone().flatten();
                                                 let file_name = file_name.clone();
                                                 async move {
                                                     let Some(storage) = storage else { return };
-                                                    if let Err(e) =
-                                                        storage::delete(storage.roms(), &file_name).await
-                                                    {
-                                                        flash(
+                                                    match storage::delete(storage.roms(), &file_name).await {
+                                                        Err(e) => flash(
                                                             library_flash,
                                                             format!("couldn't delete {file_name}: {e}"),
                                                             false,
                                                             5000,
-                                                        );
+                                                        ),
+                                                        // The game's saves go with it —
+                                                        // without their game they're
+                                                        // unreachable dead weight.
+                                                        Ok(()) => {
+                                                            if let Err(e) =
+                                                                storage.delete_save_dir(crc32).await
+                                                            {
+                                                                flash(
+                                                                    library_flash,
+                                                                    format!(
+                                                                        "deleted {file_name}, but not its saves: {e}"
+                                                                    ),
+                                                                    false,
+                                                                    5000,
+                                                                );
+                                                            }
+                                                            // The pick and the remembered
+                                                            // game/save all forget it.
+                                                            if *selected_game.peek() == Some(crc32) {
+                                                                selected_game.set(None);
+                                                                selected_save.set(None);
+                                                            }
+                                                            config.with_mut(|c| {
+                                                                c.last_saves.remove(&crc32);
+                                                                if c.last_game == Some(crc32) {
+                                                                    c.last_game = None;
+                                                                }
+                                                            });
+                                                        }
                                                     }
                                                     pending_delete.set(None);
                                                     *library_rev.write() += 1;

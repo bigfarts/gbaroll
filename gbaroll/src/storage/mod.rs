@@ -13,7 +13,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
     FileSystemDirectoryHandle, FileSystemFileHandle, FileSystemGetDirectoryOptions,
-    FileSystemGetFileOptions, FileSystemWritableFileStream,
+    FileSystemGetFileOptions, FileSystemRemoveOptions, FileSystemWritableFileStream,
 };
 
 #[wasm_bindgen]
@@ -89,6 +89,22 @@ impl Storage {
 
     pub fn root(&self) -> &FileSystemDirectoryHandle {
         &self.root
+    }
+
+    /// Delete a game's whole `saves/<crc32>/` directory, saves and
+    /// all. A game that never saved has no directory — that's fine.
+    pub async fn delete_save_dir(&self, crc32: u32) -> Result<(), StorageError> {
+        if self.existing_save_dir(crc32).await.is_none() {
+            return Ok(());
+        }
+        let opts = FileSystemRemoveOptions::new();
+        opts.set_recursive(true);
+        JsFuture::from(
+            self.saves
+                .remove_entry_with_options(&format!("{crc32:08x}"), &opts),
+        )
+        .await?;
+        Ok(())
     }
 }
 
