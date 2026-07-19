@@ -505,6 +505,18 @@ main.settings-main .card:last-child {
 .card-head > div:first-child {
     flex: 1;
     min-width: 0;
+    /* Title and any subtitle share one line, so panes with and
+       without a subtitle keep the same header height. */
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.card-head .sub {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .card > h2 {

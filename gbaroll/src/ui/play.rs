@@ -515,7 +515,7 @@ pub fn PlayScreen() -> Element {
                     // Whose saves these are — the pane only ever shows
                     // the selected game's.
                     if let Some(info) = &selected_info {
-                        p { class: "sub", "{info.display_name()}" }
+                        span { class: "sub", "{info.display_name()}" }
                     }
                 }
             }
