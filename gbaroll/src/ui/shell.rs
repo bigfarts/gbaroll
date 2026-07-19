@@ -194,6 +194,7 @@ fn Shell() -> Element {
         mut library_rev,
         library,
         selected_game,
+        selected_save,
         ..
     } = use_ctx();
     let mut tab = use_signal(Tab::default);
@@ -281,6 +282,7 @@ fn Shell() -> Element {
                     async move {
                         let Some(storage) = storage else { return };
                         let counts = crate::web::import_files(&storage, files, dest).await;
+                        play::select_imported(&counts, selected_game, selected_save, config);
                         play::import_flashes(counts, play::ROM_IMPORT_FLASH.signal());
                         *library_rev.write() += 1;
                         *crate::runtime::SAVES_REV.write() += 1;

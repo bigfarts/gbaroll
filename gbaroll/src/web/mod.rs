@@ -249,7 +249,7 @@ async fn read_file(file: &dioxus::html::FileData) -> anyhow::Result<Vec<u8>> {
 
 /// What an import pass did: files landed per kind, files skipped, and
 /// saves that had no game to land in.
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 pub struct ImportCounts {
     pub roms: u32,
     pub saves: u32,
@@ -258,6 +258,11 @@ pub struct ImportCounts {
     /// `saves/<crc32>/` directory to land in, so they're refused
     /// rather than guessed.
     pub saves_without_game: u32,
+    /// The (last) imported ROM's CRC32 and save's file name — only
+    /// meaningful to callers when the matching count is exactly 1
+    /// (a lone arrival gets auto-selected).
+    pub rom_crc32: Option<u32>,
+    pub save_name: Option<String>,
 }
 
 /// Import picked files into OPFS, routed by extension: ROMs into the
@@ -293,7 +298,10 @@ pub async fn import_files(
             // the UI never needs to show a filename.
             let stored = library::normalized_file_name(&info);
             match storage::write(storage.roms(), &stored, &bytes).await {
-                Ok(()) => counts.roms += 1,
+                Ok(()) => {
+                    counts.roms += 1;
+                    counts.rom_crc32 = Some(info.crc32);
+                }
                 Err(e) => {
                     log::error!("couldn't import {name}: {e}");
                     counts.skipped += 1;
@@ -319,7 +327,10 @@ pub async fn import_files(
                 Err(e) => Err(e),
             };
             match result {
-                Ok(()) => counts.saves += 1,
+                Ok(()) => {
+                    counts.saves += 1;
+                    counts.save_name = Some(name.clone());
+                }
                 Err(e) => {
                     log::error!("couldn't import {name}: {e}");
                     counts.skipped += 1;
@@ -331,7 +342,10 @@ pub async fn import_files(
             // handing files over with mangled names.
             let stored = library::normalized_file_name(&info);
             match storage::write(storage.roms(), &stored, &bytes).await {
-                Ok(()) => counts.roms += 1,
+                Ok(()) => {
+                    counts.roms += 1;
+                    counts.rom_crc32 = Some(info.crc32);
+                }
                 Err(e) => {
                     log::error!("couldn't import {name}: {e}");
                     counts.skipped += 1;

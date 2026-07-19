@@ -56,6 +56,7 @@ pub(crate) fn import_flashes(
         saves,
         skipped,
         saves_without_game,
+        ..
     } = counts;
     // Saves offered with no game picked had nowhere to land; the save
     // pane says what to do about it.
@@ -112,6 +113,37 @@ pub(crate) fn FlashText(flash: Flash) -> Element {
                 icons::Check {}
             }
             "{flash.text}"
+        }
+    }
+}
+
+/// A lone new arrival is what the player wants next: a single
+/// imported ROM becomes the selected game (bringing its remembered
+/// save), else a single imported save becomes the selected pick.
+/// Batches select nothing. When a lone ROM and a lone save arrive
+/// together the ROM wins — the save landed in the *previously*
+/// selected game's directory, so picking it under the new game would
+/// name a file that isn't there.
+pub(crate) fn select_imported(
+    counts: &crate::web::ImportCounts,
+    mut selected_game: Signal<Option<u32>>,
+    mut selected_save: Signal<Option<String>>,
+    mut config: Signal<crate::config::Config>,
+) {
+    if counts.roms == 1 {
+        if let Some(crc32) = counts.rom_crc32 {
+            selected_game.set(Some(crc32));
+            selected_save.set(config.peek().last_saves.get(&crc32).cloned());
+            config.with_mut(|c| c.last_game = Some(crc32));
+        }
+    } else if counts.saves == 1 {
+        if let Some(name) = &counts.save_name {
+            selected_save.set(Some(name.clone()));
+            if let Some(crc32) = *selected_game.peek() {
+                config.with_mut(|c| {
+                    c.last_saves.insert(crc32, name.clone());
+                });
+            }
         }
     }
 }
@@ -336,6 +368,7 @@ pub fn PlayScreen() -> Element {
                                     let Some(storage) = storage else { return };
                                     let counts =
                                         crate::web::import_files(&storage, files, dest).await;
+                                    select_imported(&counts, selected_game, selected_save, config);
                                     import_flashes(counts, rom_import_flash);
                                     *library_rev.write() += 1;
                                     *crate::runtime::SAVES_REV.write() += 1;
@@ -515,6 +548,7 @@ pub fn PlayScreen() -> Element {
                                     let Some(storage) = storage else { return };
                                     let counts =
                                         crate::web::import_files(&storage, files, dest).await;
+                                    select_imported(&counts, selected_game, selected_save, config);
                                     import_flashes(counts, save_import_flash);
                                     *library_rev.write() += 1;
                                     *crate::runtime::SAVES_REV.write() += 1;
