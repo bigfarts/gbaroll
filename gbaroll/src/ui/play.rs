@@ -537,6 +537,7 @@ pub fn PlayScreen() -> Element {
                 // nothing to list, and imports have nowhere to land.
                 if selected_info.is_none() {
                     div { class: "empty",
+                        icons::Save {}
                         p { "No game picked" }
                         p { class: "sub", "Each game keeps its own saves — pick one to see them." }
                         // A save dropped in this state flashes its
