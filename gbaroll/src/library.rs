@@ -163,17 +163,23 @@ pub fn ext_of(name: &str) -> &str {
 
 /// One game's save files, listed straight from its `saves/<crc32>/`
 /// directory — no cached index; callers re-list whenever they need
-/// the current picture. A game with no directory has no saves.
+/// the current picture. A game with no directory has no saves. Sorted
+/// by stem, then full name (OPFS iteration order is unspecified), so
+/// siblings like `zelda.sav`/`zelda.ss1` stay together.
 pub async fn list_game_saves(storage: &Storage, crc32: u32) -> Vec<String> {
     let Some(dir) = storage.existing_save_dir(crc32).await else {
         return Vec::new();
     };
     match storage::list_files(&dir).await {
-        Ok(files) => files
-            .into_iter()
-            .map(|(name, _)| name)
-            .filter(|n| has_extension(n, SAVE_EXTENSIONS))
-            .collect(),
+        Ok(files) => {
+            let mut names = files
+                .into_iter()
+                .map(|(name, _)| name)
+                .filter(|n| has_extension(n, SAVE_EXTENSIONS))
+                .collect::<Vec<_>>();
+            names.sort_by(|a, b| stem_of(a).cmp(stem_of(b)).then_with(|| a.cmp(b)));
+            names
+        }
         Err(e) => {
             log::error!("couldn't list {crc32:08x}'s saves: {e}");
             Vec::new()
