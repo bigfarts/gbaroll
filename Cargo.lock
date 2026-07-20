@@ -2071,7 +2071,7 @@ dependencies = [
 [[package]]
 name = "mgba"
 version = "4.0.32"
-source = "git+https://github.com/tangobattle/mgba-rs#88cd657f53bdf1e2318f0a41609e8f05ca31f057"
+source = "git+https://github.com/tangobattle/mgba-rs#873dd913b27d07d45969d697fbe1f6c05889079b"
 dependencies = [
  "log",
  "mgba-sys",
@@ -2094,7 +2094,7 @@ dependencies = [
 [[package]]
 name = "mgba-sys"
 version = "0.1.0"
-source = "git+https://github.com/tangobattle/mgba-rs#88cd657f53bdf1e2318f0a41609e8f05ca31f057"
+source = "git+https://github.com/tangobattle/mgba-rs#873dd913b27d07d45969d697fbe1f6c05889079b"
 dependencies = [
  "bindgen",
  "cc",
