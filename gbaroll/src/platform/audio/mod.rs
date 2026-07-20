@@ -123,7 +123,10 @@ const TARGET_QUEUED_SECS: f64 = 0.05;
 /// enough to converge the queue.
 const MAX_TRIM: f64 = 0.005;
 /// Queue depth (in targets) past which we discard oldest samples in one
-/// go instead of trimming — a rollback re-sim can dump a deep backlog.
+/// go instead of trimming. Healthy operation never exceeds ~1.7x, and
+/// rollbacks can't get here (re-simulation replaces its revoked audio
+/// exactly) — only producer bursts do, e.g. the sim catching up after
+/// the consumer stalled. One skip beats seconds of extra latency.
 const DISCARD_FACTOR: f64 = 3.0;
 
 /// Pulls audio out of the presented core of a live link, resampling
@@ -144,6 +147,13 @@ pub struct LinkStream {
     dest_capacity: usize,
     /// Scratch for bulk-discarding backlog.
     discard: Vec<i16>,
+    /// Serve silence until the queue reaches target once. Latched at
+    /// construction and on any fill the queue couldn't cover — the
+    /// stall signature (a hidden tab throttling the sim, a pause, a
+    /// link swap). Without it the post-stall rebuild happens at the
+    /// servo's ~5 ms of queue per second and the stream rides
+    /// near-empty for ~10 seconds, crackling on every jitter trough.
+    priming: bool,
 }
 
 impl LinkStream {
@@ -161,6 +171,7 @@ impl LinkStream {
             dest_buffer: mgba::audio::OwnedAudioBuffer::new(dest_capacity, NUM_CHANNELS as u32),
             dest_capacity,
             discard: Vec::new(),
+            priming: true,
         }
     }
 }
@@ -176,7 +187,9 @@ impl Stream for LinkStream {
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
         if fps_target <= 0.0 {
-            return 0; // paused / ended — silence
+            // Paused / ended — silence, and a stall by definition.
+            self.priming = true;
+            return 0;
         }
         let player = self
             .shared
@@ -190,10 +203,11 @@ impl Stream for LinkStream {
             self.dest_capacity = new_capacity;
         }
 
-        let (resampler, dest_buffer, discard) = (
+        let (resampler, dest_buffer, discard, priming) = (
             &mut self.resampler,
             &mut self.dest_buffer,
             &mut self.discard,
+            &mut self.priming,
         );
         let out_rate = self.sample_rate as f64;
         let pulled = self.access.with_link(|link| {
@@ -218,9 +232,21 @@ impl Stream for LinkStream {
                 source.read(discard, n);
             }
 
+            // Re-prime across stalls: hold silence until the queue is
+            // back at target, instead of riding near-empty at the
+            // servo's slow refill. (The latch is set on short delivery
+            // below — the queue never reads exactly zero, the resampler
+            // leaves fractional residue when it runs dry.)
+            let queued = source.available() as f64;
+            if *priming {
+                if queued < target {
+                    return;
+                }
+                *priming = false;
+            }
+
             // Servo: nudge the claimed source rate so the queue
             // converges on the target.
-            let queued = source.available() as f64;
             let trim = MAX_TRIM * ((queued - target) / target).clamp(-1.0, 1.0);
 
             resampler.set_source(&mut source, rate * (1.0 + trim), true);
@@ -228,8 +254,18 @@ impl Stream for LinkStream {
             resampler.process();
         });
         if pulled.is_none() {
-            // Link unavailable (booting / seek chase): silence.
+            // Link unavailable (booting / seek chase): silence, and a
+            // stall by definition.
+            self.priming = true;
             return 0;
+        }
+
+        // A fill the queue couldn't cover in full is the stall
+        // signature — and the moment an artifact was unavoidable
+        // anyway. Latch priming so recovery is one clean gap instead
+        // of seconds of jitter-trough crackle at a near-empty queue.
+        if self.dest_buffer.available() < frame_count {
+            self.priming = true;
         }
 
         let available = self.dest_buffer.available().min(frame_count);
