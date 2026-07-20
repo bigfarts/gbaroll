@@ -995,6 +995,33 @@ fn install_keyboard(runtime: Weak<RefCell<Runtime>>) {
                 }
                 let Some(rt) = runtime.upgrade() else { return };
                 let Ok(mut rt) = rt.try_borrow_mut() else { return };
+                // The event's modifier flags are ground truth for keys
+                // whose keyup can vanish without a blur (macOS system
+                // shortcuts like ⌘⇧4 ride on modifiers and swallow
+                // their releases): an event arriving without a flag
+                // proves that modifier is up, however its keyup was
+                // lost.
+                for (down, sides) in [
+                    (e.shift_key(), ["ShiftLeft", "ShiftRight"]),
+                    (e.ctrl_key(), ["ControlLeft", "ControlRight"]),
+                    (e.alt_key(), ["AltLeft", "AltRight"]),
+                    (e.meta_key(), ["MetaLeft", "MetaRight"]),
+                ] {
+                    if !down {
+                        for side in sides {
+                            rt.key_event(side, false);
+                        }
+                    }
+                }
+                // Releases always land, whatever gate consumed the
+                // press: held state must never outlive the physical
+                // key, or a stale fast-forward runs the next solo
+                // machine at 3×. Everything below is a press-side
+                // concern.
+                if !pressed {
+                    rt.key_event(&code, false);
+                    return;
+                }
                 // Keys belong to the page unless something here consumes
                 // them: a live session (game input, the Escape overlays)
                 // or its menu. Anywhere else — pickers, settings, lobby —
@@ -1005,7 +1032,7 @@ fn install_keyboard(runtime: Weak<RefCell<Runtime>>) {
                 // Escape drives the overlays, never the game: it
                 // collapses the cable panel first, then toggles the menu.
                 if code == "Escape" {
-                    if pressed && rt.shared().is_some() {
+                    if rt.shared().is_some() {
                         if *PANEL_OPEN.peek() && !*MENU_OPEN.peek() {
                             *PANEL_OPEN.write() = false;
                         } else {
@@ -1019,18 +1046,13 @@ fn install_keyboard(runtime: Weak<RefCell<Runtime>>) {
                 // A focused control owns the keyboard: while the user is
                 // in the session's UI (the room-code input, a menu
                 // button), bound keys must not double as game input.
-                // Releases still land so a key held when focus moved
-                // can't stay down forever.
                 let item_focused = doc
                     .active_element()
                     .is_some_and(|el| !matches!(el.tag_name().as_str(), "BODY" | "HTML"));
                 if item_focused {
-                    if !pressed {
-                        rt.key_event(&code, false);
-                    }
                     return;
                 }
-                if rt.key_event(&code, pressed) {
+                if rt.key_event(&code, true) {
                     // Bound key: don't let arrows/space scroll the page.
                     e.prevent_default();
                 }
