@@ -4,7 +4,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use mgba_siolink::{BootSide, Link, LinkOptions, SideOptions};
+use mgba_rollback::{BootSide, Link, LinkOptions, SideOptions};
 
 use crate::session::{
     prepare_audio_buffers, Handoff, LinkAccess, LinkKind, SessionDescriptor, SessionEnd,

@@ -1,6 +1,6 @@
 //! Session state: what a running emulator shares with the UI and the
 //! audio pump, plus the per-kind drivers the runtime ticks. Two kinds —
-//! netplay (rollback via `mgba_siolink::session::Session`) and local (a
+//! netplay (rollback via `mgba_rollback::session::Session`) and local (a
 //! plain link on one machine) — publish the same [`SharedSession`] so
 //! the session view renders them uniformly.
 //!
@@ -37,13 +37,13 @@ pub const UNPLUG_QUEUE_LENGTH: usize = 180;
 #[derive(Clone)]
 pub enum LinkAccess {
     #[allow(dead_code)] // netplay (M5)
-    Handle(mgba_siolink::session::LinkHandle),
-    Shared(Arc<Mutex<mgba_siolink::Link>>),
+    Handle(mgba_rollback::session::LinkHandle),
+    Shared(Arc<Mutex<mgba_rollback::Link>>),
 }
 
 impl LinkAccess {
     /// Run `f` against the live link.
-    pub fn with_link<R>(&self, f: impl FnOnce(&mut mgba_siolink::Link) -> R) -> Option<R> {
+    pub fn with_link<R>(&self, f: impl FnOnce(&mut mgba_rollback::Link) -> R) -> Option<R> {
         match self {
             LinkAccess::Handle(h) => Some(h.with_link(f)),
             LinkAccess::Shared(l) => Some(f(&mut l.lock().unwrap())),
@@ -97,10 +97,10 @@ pub enum LinkKind {
 }
 
 impl LinkKind {
-    pub fn peripheral(self) -> mgba_siolink::Peripheral {
+    pub fn peripheral(self) -> mgba_rollback::Peripheral {
         match self {
-            LinkKind::Cable => mgba_siolink::Peripheral::Cable,
-            LinkKind::Wireless => mgba_siolink::Peripheral::Wireless,
+            LinkKind::Cable => mgba_rollback::Peripheral::Cable,
+            LinkKind::Wireless => mgba_rollback::Peripheral::Wireless,
         }
     }
 
@@ -317,7 +317,7 @@ pub struct SessionDescriptor {
 
 /// Deepen every core's audio buffer past mgba's 2048 default so servo
 /// regulation has room, and drop anything buffered during boot.
-pub fn prepare_audio_buffers(link: &mut mgba_siolink::Link) {
+pub fn prepare_audio_buffers(link: &mut mgba_rollback::Link) {
     for i in 0..link.num_players() {
         let mut core = link.core_mut(i);
         core.set_audio_buffer_size(16384);

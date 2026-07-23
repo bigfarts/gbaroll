@@ -1,4 +1,4 @@
-//! The netplay session: a rollback `mgba_siolink::session::Session`
+//! The netplay session: a rollback `mgba_rollback::session::Session`
 //! ticked by the runtime pump, with per-peer rennet streams over the
 //! mesh's unreliable datachannels. The tick body mirrors tango's:
 //! drain the network, queue watchdog, read skew *before* advance,
@@ -15,9 +15,9 @@ use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc;
 use gloo_timers::future::TimeoutFuture;
-use mgba_siolink::session::Session;
-use mgba_siolink::throttler::Throttler;
-use mgba_siolink::{BootSide, Link};
+use mgba_rollback::session::Session;
+use mgba_rollback::throttler::Throttler;
+use mgba_rollback::{BootSide, Link};
 use web_time::Instant;
 
 use crate::net::lobby::SessionBundle;

@@ -233,7 +233,7 @@ impl ReplayAudioProducer {
         self.scratch.clear();
     }
 
-    fn clear_sources(link: &mut mgba_siolink::Link) {
+    fn clear_sources(link: &mut mgba_rollback::Link) {
         for i in 0..link.num_players() {
             link.core_mut(i).audio_buffer().clear();
         }
@@ -241,7 +241,7 @@ impl ReplayAudioProducer {
 
     pub fn publish(
         &mut self,
-        link: &mut mgba_siolink::Link,
+        link: &mut mgba_rollback::Link,
         player: usize,
         speed_percent: u32,
         fps_target: f32,

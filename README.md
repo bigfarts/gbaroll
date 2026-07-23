@@ -6,7 +6,7 @@ game works — there is no per-game code. 2 to 4 players per session.
 ## How it works
 
 Every GBA on the emulated cable runs locally in one
-`mgba_siolink::Link` (mgba cores joined through the lockstep SIO
+`mgba_rollback::Link` (mgba cores joined through the lockstep SIO
 driver). The link is the rollback unit: the only true inputs are the
 joypads, everything on the wire is derived deterministically. Each peer
 runs the same link and one `getgud` rollback session, feeding confirmed
@@ -50,7 +50,7 @@ when a prediction misses.
   secrets). Deployed at `wss://gbaroll-signaling.farts.fyi`.
 - `gbaroll-replay` — the replay container.
 
-The engine crates (`mgba-siolink`, `getgud`, `rennet`) come from the
+The engine crates (`mgba-rollback`, `getgud`, `rennet`) come from the
 tango workspace, expected as a sibling checkout at `../tango`.
 
 ## Running

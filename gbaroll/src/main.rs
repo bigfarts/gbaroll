@@ -2,7 +2,7 @@
 //! browser.
 //!
 //! Every GBA on the emulated cable (2 to 4) runs locally in one
-//! `mgba_siolink::Link`; the link is the rollback unit and the only true
+//! `mgba_rollback::Link`; the link is the rollback unit and the only true
 //! inputs are the joypads, so any link-capable game works with no
 //! per-game code. Netplay is a full WebRTC mesh rendezvoused through the
 //! `gbaroll-signaling` server; the data protocol is `rennet` frames over

@@ -47,7 +47,7 @@ const REWIND_MAX_ENTRIES_2P: usize = 192;
 /// blits never need emulation.
 pub struct Snapshot {
     pub tick: u32,
-    pub state: mgba_siolink::Snapshot,
+    pub state: mgba_rollback::Snapshot,
     /// Every core's framebuffer (native BGR555), indexed by player.
     pub framebuffers: Vec<Vec<u8>>,
 }
@@ -246,7 +246,7 @@ impl BootConfig {
     /// Boot a link poised at tick 0: the recorded plug-in captures when
     /// the replay carries them, a hard reset otherwise. Either way the
     /// recording's tick 0 is exactly this state — no priming.
-    pub fn boot(&self) -> anyhow::Result<mgba_siolink::Link> {
+    pub fn boot(&self) -> anyhow::Result<mgba_rollback::Link> {
         let rtc = Some(
             self.rtc_unix_micros
                 .map(|us| std::time::UNIX_EPOCH + std::time::Duration::from_micros(us))
@@ -262,25 +262,25 @@ impl BootConfig {
                 .zip(self.boots.iter())
                 .map(|(rom, boot)| {
                     let blob = crate::net::protocol::BootBlob::decode(boot.as_deref().unwrap())?;
-                    anyhow::Ok(mgba_siolink::BootSide {
+                    anyhow::Ok(mgba_rollback::BootSide {
                         rom,
                         save: blob.save,
                         state: blob.state,
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            mgba_siolink::Link::from_states(sides, rtc)?
+            mgba_rollback::Link::from_states(sides, rtc)?
         } else {
             anyhow::ensure!(
                 self.boots.iter().all(|b| b.is_none()),
                 "replay mixes captured and power-on sides"
             );
-            mgba_siolink::Link::with_options(mgba_siolink::LinkOptions {
+            mgba_rollback::Link::with_options(mgba_rollback::LinkOptions {
                 sides: self
                     .roms
                     .iter()
                     .cloned()
-                    .map(|rom| mgba_siolink::SideOptions { rom, save: None })
+                    .map(|rom| mgba_rollback::SideOptions { rom, save: None })
                     .collect(),
                 rtc,
             })?
@@ -294,7 +294,7 @@ impl BootConfig {
 /// host wraps it in a mutex shared by the drive loop and seek chase;
 /// audio is published separately by the drive thread.
 pub struct Playback {
-    link: mgba_siolink::Link,
+    link: mgba_rollback::Link,
     inputs: Arc<Vec<Vec<u32>>>,
     cursor: u32,
 }
@@ -347,12 +347,12 @@ impl Playback {
     }
 
     /// Direct link access, for video/audio readout.
-    pub fn link_mut(&mut self) -> &mut mgba_siolink::Link {
+    pub fn link_mut(&mut self) -> &mut mgba_rollback::Link {
         &mut self.link
     }
 }
 
-fn capture(link: &mut mgba_siolink::Link, tick: u32) -> Snapshot {
+fn capture(link: &mut mgba_rollback::Link, tick: u32) -> Snapshot {
     let state = link.save().expect("link snapshot");
     let framebuffers = (0..link.num_players())
         .map(|i| link.video_buffer(i).map(|b| b.to_vec()).unwrap_or_default())

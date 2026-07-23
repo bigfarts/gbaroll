@@ -31,7 +31,7 @@ env_logger = "0.11"
 # The engine crates live in their own repos (pulled out of the tango
 # workspace), so no tango checkout is needed to build gbaroll.
 getgud = { git = "https://github.com/tangobattle/getgud" }
-mgba-siolink = { git = "https://github.com/tangobattle/mgba-siolink" }
+mgba-rollback = { git = "https://github.com/tangobattle/mgba-rollback" }
 rennet = { git = "https://github.com/tangobattle/rennet" }
 
 [profile.release]

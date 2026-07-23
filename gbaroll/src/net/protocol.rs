@@ -104,7 +104,7 @@ pub enum PeerControl {
 /// boot the same link.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BootBlob {
-    /// Serialized core state ([`mgba_siolink::Link::capture_boot_state`]).
+    /// Serialized core state ([`mgba_rollback::Link::capture_boot_state`]).
     pub state: Vec<u8>,
     /// SRAM/flash image at capture time (core states don't carry
     /// savedata).

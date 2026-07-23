@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 # Engine (lives in the tango workspace next door).
 mgba.workspace = true
-mgba-siolink.workspace = true
+mgba-rollback.workspace = true
 rennet.workspace = true
 
 gbaroll-signaling = { path = "../gbaroll-signaling" }

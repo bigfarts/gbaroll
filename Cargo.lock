@@ -1272,7 +1272,7 @@ dependencies = [
  "js-sys",
  "log",
  "mgba",
- "mgba-siolink",
+ "mgba-rollback",
  "rennet",
  "serde",
  "serde_json",
@@ -2080,9 +2080,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "mgba-siolink"
+name = "mgba-rollback"
 version = "0.1.0"
-source = "git+https://github.com/tangobattle/mgba-siolink#ef571307b4293bd02faaa1624326d5f8f7d7ebfc"
+source = "git+https://github.com/tangobattle/mgba-rollback#150b17b646f4e437136befc6adbdcaf6e584f0b0"
 dependencies = [
  "crc32fast",
  "getgud",
