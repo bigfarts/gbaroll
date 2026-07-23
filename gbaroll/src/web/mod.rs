@@ -15,7 +15,7 @@ pub const FALLBACK_DAT: Asset = asset!("/assets/nointro-fallback.dat");
 
 /// The C shim's clock (mgba's `gettimeofday` for savestate stamps).
 #[no_mangle]
-pub extern "C" fn gbaroll_now_unix_ms() -> f64 {
+pub extern "C" fn mgba_sys_now_unix_ms() -> f64 {
     js_sys::Date::now()
 }
 
@@ -41,7 +41,9 @@ fn install_service_worker() {
     if cfg!(debug_assertions) {
         return;
     }
-    let Some(window) = web_sys::window() else { return };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
     let promise = window.navigator().service_worker().register("/sw.js");
     wasm_bindgen_futures::spawn_local(async move {
         if let Err(e) = wasm_bindgen_futures::JsFuture::from(promise).await {
