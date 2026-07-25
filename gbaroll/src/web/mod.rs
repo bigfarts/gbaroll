@@ -13,12 +13,6 @@ const WORKLET_JS: Asset = asset!("/assets/audio-worklet.js");
 /// Bundled No-Intro snapshot for offline/first load.
 pub const FALLBACK_DAT: Asset = asset!("/assets/nointro-fallback.dat");
 
-/// The C shim's clock (mgba's `gettimeofday` for savestate stamps).
-#[no_mangle]
-pub extern "C" fn mgba_sys_now_unix_ms() -> f64 {
-    js_sys::Date::now()
-}
-
 pub fn main() {
     install_panic_hook();
     let _ = console_log::init_with_level(log::Level::Info);
