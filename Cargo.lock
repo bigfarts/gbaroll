@@ -2071,7 +2071,7 @@ dependencies = [
 [[package]]
 name = "mgba"
 version = "4.0.32"
-source = "git+https://github.com/tangobattle/mgba-rs#7059146e6bff693e498c278decf8230cd038670e"
+source = "git+https://github.com/tangobattle/mgba-rs#3a4621b158adef0ca1d82cde79d54ea52a795587"
 dependencies = [
  "log",
  "mgba-sys",
@@ -2082,7 +2082,7 @@ dependencies = [
 [[package]]
 name = "mgba-rollback"
 version = "0.1.0"
-source = "git+https://github.com/tangobattle/mgba-rollback#150b17b646f4e437136befc6adbdcaf6e584f0b0"
+source = "git+https://github.com/tangobattle/mgba-rollback#6911e1870fe102ed9eba5d1a17d191eaa4898d7d"
 dependencies = [
  "crc32fast",
  "getgud",
@@ -2094,11 +2094,12 @@ dependencies = [
 [[package]]
 name = "mgba-sys"
 version = "0.1.0"
-source = "git+https://github.com/tangobattle/mgba-rs#7059146e6bff693e498c278decf8230cd038670e"
+source = "git+https://github.com/tangobattle/mgba-rs#3a4621b158adef0ca1d82cde79d54ea52a795587"
 dependencies = [
  "bindgen",
  "cc",
  "cmake",
+ "js-sys",
  "libc",
  "libz-sys",
  "shell-words",
